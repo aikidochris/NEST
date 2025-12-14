@@ -7,7 +7,9 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import type { BBox } from "@/types/property";
 import { AuthControls } from "@/components/AuthControls";
 import { PropertyCardSheet } from "@/components/PropertyCardSheet";
+import { AreaVibeBar, type VibeStats, type LiveFeedEvent } from "@/components/AreaVibeBar";
 import { useAuth } from "@/app/AuthProvider";
+import { inspectLog, resolveStatus } from "@/lib/inspect";
 
 // =============================================================================
 // DESIGN KNOBS - Configurable constants
@@ -48,19 +50,45 @@ function computeBBox(bounds: maplibregl.LngLatBounds): BBox {
     };
 }
 
+/**
+ * Create a grid key for caching (rounds bbox to ~0.01 degree grid)
+ */
+function bboxToGridKey(bbox: BBox): string {
+    const precision = 100; // ~1km grid
+    return [
+        Math.round(bbox.minLon * precision),
+        Math.round(bbox.minLat * precision),
+        Math.round(bbox.maxLon * precision),
+        Math.round(bbox.maxLat * precision),
+    ].join(",");
+}
+
 export default function PropertyMap() {
     const mapRef = useRef<MapRef>(null);
     const [viewState, setViewState] = useState(DEFAULT_VIEW);
     const [selectedPropertyId, setSelectedPropertyId] = useState<string | null>(null);
     const [myClaimsData, setMyClaimsData] = useState<GeoJSON.FeatureCollection>(EMPTY_GEOJSON);
     const [clusterData, setClusterData] = useState<GeoJSON.FeatureCollection>(EMPTY_GEOJSON);
+    const [vibeStats, setVibeStats] = useState<VibeStats | null>(null);
+    const [vibeLoading, setVibeLoading] = useState(false);
+    const [liveFeedEvents, setLiveFeedEvents] = useState<LiveFeedEvent[]>([]);
+    const [liveFeedLoading, setLiveFeedLoading] = useState(false);
+    const [vibeBarExpanded, setVibeBarExpanded] = useState(false);
 
     const { accessToken } = useAuth();
 
     // Abort controllers
     const claimsAbortRef = useRef<AbortController | null>(null);
     const clusterAbortRef = useRef<AbortController | null>(null);
+    const vibeAbortRef = useRef<AbortController | null>(null);
+    const liveFeedAbortRef = useRef<AbortController | null>(null);
     const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+    // Cache for vibe stats by grid key
+    const vibeCacheRef = useRef<globalThis.Map<string, VibeStats>>(new globalThis.Map());
+
+    // Store current bbox for live feed fetch
+    const currentBboxRef = useRef<BBox | null>(null);
 
     // Fetch cluster data (GeoJSON for clustering at low zoom)
     const fetchClusterData = useCallback(async (bbox: BBox, zoom: number) => {
@@ -151,6 +179,54 @@ export default function PropertyMap() {
         [accessToken]
     );
 
+    // Fetch vibe stats for area
+    const fetchVibeStats = useCallback(async (bbox: BBox) => {
+        const gridKey = bboxToGridKey(bbox);
+
+        // Check cache first
+        const cached = vibeCacheRef.current.get(gridKey);
+        if (cached) {
+            setVibeStats(cached);
+            return;
+        }
+
+        if (vibeAbortRef.current) {
+            vibeAbortRef.current.abort();
+        }
+
+        const controller = new AbortController();
+        vibeAbortRef.current = controller;
+        setVibeLoading(true);
+
+        try {
+            const bboxParam = `${bbox.minLon},${bbox.minLat},${bbox.maxLon},${bbox.maxLat}`;
+            const response = await fetch(`/api/area-vibe?bbox=${bboxParam}`, {
+                signal: controller.signal,
+            });
+
+            if (!response.ok) {
+                setVibeStats(null);
+                return;
+            }
+
+            const json = await response.json();
+            if (json.ok && json.data) {
+                vibeCacheRef.current.set(gridKey, json.data);
+                // Keep cache size reasonable
+                if (vibeCacheRef.current.size > 50) {
+                    const firstKey = vibeCacheRef.current.keys().next().value;
+                    if (firstKey) vibeCacheRef.current.delete(firstKey);
+                }
+                setVibeStats(json.data);
+            }
+        } catch (err) {
+            if (err instanceof Error && err.name === "AbortError") return;
+            setVibeStats(null);
+        } finally {
+            setVibeLoading(false);
+        }
+    }, []);
+
     // Debounced fetch on map move
     const handleMoveEnd = useCallback(
         (evt: ViewStateChangeEvent) => {
@@ -167,10 +243,49 @@ export default function PropertyMap() {
             debounceTimerRef.current = setTimeout(() => {
                 fetchMyClaims(bbox);
                 fetchClusterData(bbox, zoom);
+                fetchVibeStats(bbox);
+                currentBboxRef.current = bbox;
+                // Fetch live feed if panel is expanded
+                if (vibeBarExpanded) {
+                    fetchLiveFeed(bbox);
+                }
             }, DEBOUNCE_MS);
         },
-        [fetchMyClaims, fetchClusterData]
+        [fetchMyClaims, fetchClusterData, fetchVibeStats, vibeBarExpanded]
     );
+
+    // Fetch live feed events
+    const fetchLiveFeed = useCallback(async (bbox: BBox) => {
+        if (liveFeedAbortRef.current) {
+            liveFeedAbortRef.current.abort();
+        }
+
+        const controller = new AbortController();
+        liveFeedAbortRef.current = controller;
+        setLiveFeedLoading(true);
+
+        try {
+            const bboxParam = `${bbox.minLon},${bbox.minLat},${bbox.maxLon},${bbox.maxLat}`;
+            const response = await fetch(`/api/live-feed?bbox=${bboxParam}&limit=30`, {
+                signal: controller.signal,
+            });
+
+            if (!response.ok) {
+                setLiveFeedEvents([]);
+                return;
+            }
+
+            const json = await response.json();
+            if (json.ok && json.events) {
+                setLiveFeedEvents(json.events);
+            }
+        } catch (err) {
+            if (err instanceof Error && err.name === "AbortError") return;
+            setLiveFeedEvents([]);
+        } finally {
+            setLiveFeedLoading(false);
+        }
+    }, []);
 
     // Initial fetch on map load + set up cursor handlers
     const handleLoad = useCallback(
@@ -182,6 +297,7 @@ export default function PropertyMap() {
                 const bbox = computeBBox(bounds);
                 fetchMyClaims(bbox);
                 fetchClusterData(bbox, map.getZoom());
+                fetchVibeStats(bbox);
             }
 
             // Pointer cursor on interactive layers
@@ -195,7 +311,7 @@ export default function PropertyMap() {
                 });
             });
         },
-        [fetchMyClaims, fetchClusterData]
+        [fetchMyClaims, fetchClusterData, fetchVibeStats]
     );
 
     // Handle map click - cluster zoom or property select
@@ -215,8 +331,18 @@ export default function PropertyMap() {
 
                 try {
                     const clusterId = clusterFeature.properties.cluster_id;
+                    const pointCount = clusterFeature.properties.point_count || 0;
+                    const currentZoom = map.getZoom();
                     const zoom = await source.getClusterExpansionZoom(clusterId);
                     const geometry = clusterFeature.geometry as GeoJSON.Point;
+
+                    // Inspection mode logging
+                    inspectLog("CLUSTER_CLICK", {
+                        cluster_id: clusterId,
+                        point_count: pointCount,
+                        current_zoom: currentZoom,
+                        expansion_zoom: zoom,
+                    });
 
                     map.easeTo({
                         center: geometry.coordinates as [number, number],
@@ -239,6 +365,46 @@ export default function PropertyMap() {
 
             const propertyId = feature.properties?.property_id;
             if (propertyId) {
+                // Build intent flags from feature properties (may be null if not available)
+                const props = feature.properties ?? {};
+                const source_layer = feature.layer?.id;
+
+                // Determine is_claimed: my-claims layer is always claimed
+                const raw_is_claimed = props.is_claimed;
+                let is_claimed: boolean | null;
+                if (source_layer === "my-claims") {
+                    // My-claims layer features are definitionally claimed by current user
+                    is_claimed = true;
+                } else if (typeof raw_is_claimed === "boolean") {
+                    is_claimed = raw_is_claimed;
+                } else {
+                    // Unknown - leave as null for debug visibility
+                    is_claimed = null;
+                }
+
+                const intent_flags = {
+                    soft_listing: props.soft_listing ?? props.is_open_to_talking ?? null,
+                    settled: props.settled ?? props.is_settled ?? null,
+                    is_for_sale: props.is_for_sale ?? null,
+                    is_for_rent: props.is_for_rent ?? null,
+                };
+
+                // Inspection mode logging for property click
+                inspectLog("PROPERTY_OPEN", {
+                    property_id: propertyId,
+                    raw_is_claimed,
+                    is_claimed,
+                    display_label: props.display_label ?? null,
+                    source_layer,
+                    intent_flags,
+                    resolved_status: resolveStatus({
+                        is_claimed,
+                        soft_listing: intent_flags.soft_listing === true,
+                        settled: intent_flags.settled === true,
+                        is_for_sale: intent_flags.is_for_sale === true,
+                        is_for_rent: intent_flags.is_for_rent === true,
+                    }),
+                });
                 setSelectedPropertyId(propertyId);
             }
         },
@@ -266,10 +432,31 @@ export default function PropertyMap() {
         return () => {
             claimsAbortRef.current?.abort();
             clusterAbortRef.current?.abort();
+            vibeAbortRef.current?.abort();
+            liveFeedAbortRef.current?.abort();
             if (debounceTimerRef.current) {
                 clearTimeout(debounceTimerRef.current);
             }
         };
+    }, []);
+
+    // Toggle vibe bar expand and fetch live feed
+    const handleToggleVibeBar = useCallback(() => {
+        setVibeBarExpanded(prev => {
+            const willExpand = !prev;
+            if (willExpand && currentBboxRef.current) {
+                fetchLiveFeed(currentBboxRef.current);
+            }
+            return willExpand;
+        });
+    }, [fetchLiveFeed]);
+
+    // Handle live feed event click - fly to property
+    const handleEventClick = useCallback(async (event: LiveFeedEvent) => {
+        // Close panel first
+        setVibeBarExpanded(false);
+        // Select property to open the sheet
+        setSelectedPropertyId(event.property_id);
     }, []);
 
     // Update sources when data changes
@@ -286,6 +473,16 @@ export default function PropertyMap() {
 
     // Show clusters layer only at low zoom
     const showClusters = viewState.zoom <= CLUSTER_MAX_ZOOM;
+
+    // Vibe bar visibility: hidden when any card/sheet is open
+    const showVibeBar = !selectedPropertyId;
+
+    // Close vibe bar when property sheet opens
+    useEffect(() => {
+        if (selectedPropertyId) {
+            setVibeBarExpanded(false);
+        }
+    }, [selectedPropertyId]);
 
     return (
         <div className="relative w-full h-screen">
@@ -480,6 +677,19 @@ export default function PropertyMap() {
                     propertyId={selectedPropertyId}
                     onClose={handleCloseSheet}
                     onClaimSuccess={handleClaimSuccess}
+                />
+            )}
+
+            {/* Area Vibe Bar - hidden when cards are open */}
+            {showVibeBar && (
+                <AreaVibeBar
+                    stats={vibeStats}
+                    events={liveFeedEvents}
+                    loading={vibeLoading}
+                    eventsLoading={liveFeedLoading}
+                    expanded={vibeBarExpanded}
+                    onToggleExpand={handleToggleVibeBar}
+                    onEventClick={handleEventClick}
                 />
             )}
         </div>

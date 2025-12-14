@@ -169,3 +169,14 @@ Invariant:
 20251214_002_fix_properties_mvt.sql
  (your new version)
  These have both run in in supabase
+ 
+ Migration 
+supabase/migrations/20251214_011_properties_mvt_b64.sql
+
+Creates properties_mvt_b64(z, x, y) returning 
+text
+Uses encode(properties_mvt(...), 'base64')
+Grants execute to anon/authenticated
+This has been ran in supabase
+
+20251214_012_live_feed_update.sql - this has been run in supabase
