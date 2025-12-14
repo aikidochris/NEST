@@ -9,18 +9,30 @@ import { AuthControls } from "@/components/AuthControls";
 import { PropertyCardSheet } from "@/components/PropertyCardSheet";
 import { useAuth } from "@/app/AuthProvider";
 
-// Free OpenStreetMap tile style
-const MAP_STYLE = "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json";
+// =============================================================================
+// DESIGN KNOBS - Configurable constants
+// =============================================================================
+const CLUSTER_COLOR = "#64748b";        // Muted Nest blue/slate
+const CLUSTER_TEXT_COLOR = "#ffffff";   // White numeric label
+const CLUSTER_RADIUS = 40;              // Cluster radius in pixels
+const CLUSTER_MAX_ZOOM = 15;            // Clusters disappear at zoom > 15
 
-// North Tyneside center as default
+// =============================================================================
+// MAP CONFIGURATION
+// =============================================================================
+const MAP_STYLE = "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json";
 const DEFAULT_VIEW = {
     longitude: -1.5,
     latitude: 55.05,
     zoom: 12,
 };
-
-// Debounce delay for my-claims fetch
 const DEBOUNCE_MS = 300;
+
+// Empty GeoJSON for initial state
+const EMPTY_GEOJSON: GeoJSON.FeatureCollection = {
+    type: "FeatureCollection",
+    features: [],
+};
 
 /**
  * Computes bbox from map bounds.
@@ -36,23 +48,71 @@ function computeBBox(bounds: maplibregl.LngLatBounds): BBox {
     };
 }
 
-// Empty GeoJSON for initial state
-const EMPTY_GEOJSON: GeoJSON.FeatureCollection = {
-    type: "FeatureCollection",
-    features: [],
-};
-
 export default function PropertyMap() {
     const mapRef = useRef<MapRef>(null);
     const [viewState, setViewState] = useState(DEFAULT_VIEW);
     const [selectedPropertyId, setSelectedPropertyId] = useState<string | null>(null);
     const [myClaimsData, setMyClaimsData] = useState<GeoJSON.FeatureCollection>(EMPTY_GEOJSON);
+    const [clusterData, setClusterData] = useState<GeoJSON.FeatureCollection>(EMPTY_GEOJSON);
 
     const { accessToken } = useAuth();
 
-    // Abort controller for my-claims requests
-    const abortControllerRef = useRef<AbortController | null>(null);
+    // Abort controllers
+    const claimsAbortRef = useRef<AbortController | null>(null);
+    const clusterAbortRef = useRef<AbortController | null>(null);
     const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+    // Fetch cluster data (GeoJSON for clustering at low zoom)
+    const fetchClusterData = useCallback(async (bbox: BBox, zoom: number) => {
+        // Only fetch for clustering at low zoom
+        if (zoom > CLUSTER_MAX_ZOOM) {
+            setClusterData(EMPTY_GEOJSON);
+            return;
+        }
+
+        if (clusterAbortRef.current) {
+            clusterAbortRef.current.abort();
+        }
+
+        const controller = new AbortController();
+        clusterAbortRef.current = controller;
+
+        try {
+            const bboxParam = `${bbox.minLon},${bbox.minLat},${bbox.maxLon},${bbox.maxLat}`;
+            const response = await fetch(`/api/properties?bbox=${bboxParam}&z=${Math.round(zoom)}`, {
+                signal: controller.signal,
+            });
+
+            if (!response.ok) {
+                setClusterData(EMPTY_GEOJSON);
+                return;
+            }
+
+            const json = await response.json();
+            if (!json.ok || !json.data) {
+                setClusterData(EMPTY_GEOJSON);
+                return;
+            }
+
+            // Convert to GeoJSON
+            const features = json.data.map((p: { property_id: string; lon: number; lat: number; is_claimed: boolean }) => ({
+                type: "Feature" as const,
+                geometry: {
+                    type: "Point" as const,
+                    coordinates: [p.lon, p.lat],
+                },
+                properties: {
+                    property_id: p.property_id,
+                    is_claimed: p.is_claimed,
+                },
+            }));
+
+            setClusterData({ type: "FeatureCollection", features });
+        } catch (err) {
+            if (err instanceof Error && err.name === "AbortError") return;
+            setClusterData(EMPTY_GEOJSON);
+        }
+    }, []);
 
     // Fetch my-claims GeoJSON overlay
     const fetchMyClaims = useCallback(
@@ -62,25 +122,21 @@ export default function PropertyMap() {
                 return;
             }
 
-            // Cancel any in-flight request
-            if (abortControllerRef.current) {
-                abortControllerRef.current.abort();
+            if (claimsAbortRef.current) {
+                claimsAbortRef.current.abort();
             }
 
             const controller = new AbortController();
-            abortControllerRef.current = controller;
+            claimsAbortRef.current = controller;
 
             try {
                 const bboxParam = `${bbox.minLon},${bbox.minLat},${bbox.maxLon},${bbox.maxLat}`;
                 const response = await fetch(`/api/my-claims?bbox=${bboxParam}`, {
-                    headers: {
-                        Authorization: `Bearer ${accessToken}`,
-                    },
+                    headers: { Authorization: `Bearer ${accessToken}` },
                     signal: controller.signal,
                 });
 
                 if (!response.ok) {
-                    // Silently handle errors (user may not have claims)
                     setMyClaimsData(EMPTY_GEOJSON);
                     return;
                 }
@@ -88,10 +144,7 @@ export default function PropertyMap() {
                 const geojson = await response.json();
                 setMyClaimsData(geojson);
             } catch (err) {
-                // Ignore abort errors
-                if (err instanceof Error && err.name === "AbortError") {
-                    return;
-                }
+                if (err instanceof Error && err.name === "AbortError") return;
                 setMyClaimsData(EMPTY_GEOJSON);
             }
         },
@@ -105,18 +158,18 @@ export default function PropertyMap() {
             if (!bounds) return;
 
             const bbox = computeBBox(bounds);
+            const zoom = evt.viewState.zoom;
 
-            // Clear existing timer
             if (debounceTimerRef.current) {
                 clearTimeout(debounceTimerRef.current);
             }
 
-            // Debounce my-claims fetch
             debounceTimerRef.current = setTimeout(() => {
                 fetchMyClaims(bbox);
+                fetchClusterData(bbox, zoom);
             }, DEBOUNCE_MS);
         },
-        [fetchMyClaims]
+        [fetchMyClaims, fetchClusterData]
     );
 
     // Initial fetch on map load + set up cursor handlers
@@ -126,11 +179,13 @@ export default function PropertyMap() {
             const bounds = map.getBounds();
 
             if (bounds) {
-                fetchMyClaims(computeBBox(bounds));
+                const bbox = computeBBox(bounds);
+                fetchMyClaims(bbox);
+                fetchClusterData(bbox, map.getZoom());
             }
 
             // Pointer cursor on interactive layers
-            const interactiveLayers = ["property-points", "my-claims"];
+            const interactiveLayers = ["property-points", "my-claims", "clusters"];
             interactiveLayers.forEach((layer) => {
                 map.on("mouseenter", layer, () => {
                     map.getCanvas().style.cursor = "pointer";
@@ -140,26 +195,55 @@ export default function PropertyMap() {
                 });
             });
         },
-        [fetchMyClaims]
+        [fetchMyClaims, fetchClusterData]
     );
 
-    // Handle map click - select property
-    const handleMapClick = useCallback((evt: MapLayerMouseEvent) => {
-        const features = evt.features;
-        if (!features || features.length === 0) return;
+    // Handle map click - cluster zoom or property select
+    const handleMapClick = useCallback(
+        async (evt: MapLayerMouseEvent) => {
+            const features = evt.features;
+            if (!features || features.length === 0) return;
 
-        // Prefer my-claims layer if present (clicked on user's own property)
-        const myClaimFeature = features.find((f) => f.layer?.id === "my-claims");
-        const baseFeature = features.find((f) => f.layer?.id === "property-points");
+            // Check for cluster click first
+            const clusterFeature = features.find((f) => f.layer?.id === "clusters");
+            if (clusterFeature && clusterFeature.properties?.cluster_id !== undefined) {
+                const map = mapRef.current?.getMap();
+                if (!map) return;
 
-        const feature = myClaimFeature || baseFeature;
-        if (!feature) return;
+                const source = map.getSource("cluster-source") as GeoJSONSource;
+                if (!source) return;
 
-        const propertyId = feature.properties?.property_id;
-        if (propertyId) {
-            setSelectedPropertyId(propertyId);
-        }
-    }, []);
+                try {
+                    const clusterId = clusterFeature.properties.cluster_id;
+                    const zoom = await source.getClusterExpansionZoom(clusterId);
+                    const geometry = clusterFeature.geometry as GeoJSON.Point;
+
+                    map.easeTo({
+                        center: geometry.coordinates as [number, number],
+                        zoom: zoom,
+                        duration: 500,
+                    });
+                } catch {
+                    // Ignore cluster zoom errors
+                }
+                return; // Don't open sheet for cluster click
+            }
+
+            // Individual property click
+            const myClaimFeature = features.find((f) => f.layer?.id === "my-claims");
+            const baseFeature = features.find((f) => f.layer?.id === "property-points");
+            const unclusteredFeature = features.find((f) => f.layer?.id === "unclustered-point");
+
+            const feature = myClaimFeature || baseFeature || unclusteredFeature;
+            if (!feature) return;
+
+            const propertyId = feature.properties?.property_id;
+            if (propertyId) {
+                setSelectedPropertyId(propertyId);
+            }
+        },
+        []
+    );
 
     // Close property sheet
     const handleCloseSheet = useCallback(() => {
@@ -180,25 +264,28 @@ export default function PropertyMap() {
     // Cleanup on unmount
     useEffect(() => {
         return () => {
-            if (abortControllerRef.current) {
-                abortControllerRef.current.abort();
-            }
+            claimsAbortRef.current?.abort();
+            clusterAbortRef.current?.abort();
             if (debounceTimerRef.current) {
                 clearTimeout(debounceTimerRef.current);
             }
         };
     }, []);
 
-    // Update my-claims source data when it changes
+    // Update sources when data changes
     useEffect(() => {
         const map = mapRef.current?.getMap();
         if (!map) return;
 
-        const source = map.getSource("my-claims-source") as GeoJSONSource | undefined;
-        if (source) {
-            source.setData(myClaimsData);
-        }
-    }, [myClaimsData]);
+        const claimsSource = map.getSource("my-claims-source") as GeoJSONSource | undefined;
+        if (claimsSource) claimsSource.setData(myClaimsData);
+
+        const clusterSource = map.getSource("cluster-source") as GeoJSONSource | undefined;
+        if (clusterSource) clusterSource.setData(clusterData);
+    }, [myClaimsData, clusterData]);
+
+    // Show clusters layer only at low zoom
+    const showClusters = viewState.zoom <= CLUSTER_MAX_ZOOM;
 
     return (
         <div className="relative w-full h-screen">
@@ -209,11 +296,11 @@ export default function PropertyMap() {
                 onMoveEnd={handleMoveEnd}
                 onLoad={handleLoad}
                 onClick={handleMapClick}
-                interactiveLayerIds={["property-points", "my-claims"]}
+                interactiveLayerIds={["property-points", "my-claims", "clusters", "unclustered-point"]}
                 style={{ width: "100%", height: "100%" }}
                 mapStyle={MAP_STYLE}
             >
-                {/* Vector tile source for all properties */}
+                {/* Vector tile source for all properties (visible at high zoom) */}
                 <Source
                     id="properties-vt"
                     type="vector"
@@ -221,37 +308,130 @@ export default function PropertyMap() {
                     minzoom={0}
                     maxzoom={14}
                 >
-                    {/* Base property points: blue=unclaimed, purple=claimed */}
                     <Layer
                         id="property-points"
                         type="circle"
                         source-layer="properties"
+                        minzoom={CLUSTER_MAX_ZOOM}
                         paint={{
                             "circle-color": [
                                 "case",
-                                ["get", "is_claimed"], "#8b5cf6", // purple for claimed
-                                "#3b82f6" // blue for unclaimed
+                                ["get", "is_claimed"], "#8b5cf6",
+                                "#3b82f6"
                             ],
                             "circle-radius": [
-                                "interpolate",
-                                ["linear"],
-                                ["zoom"],
-                                8, 2,
-                                12, 5,
-                                16, 8
+                                "interpolate", ["linear"], ["zoom"],
+                                12, 3,
+                                14, 4,
+                                16, 6
                             ],
                             "circle-stroke-width": [
-                                "interpolate",
-                                ["linear"],
-                                ["zoom"],
-                                8, 0.5,
-                                12, 1.5,
-                                16, 2
+                                "interpolate", ["linear"], ["zoom"],
+                                12, 1,
+                                16, 1.5
                             ],
                             "circle-stroke-color": "#fff",
+                            "circle-opacity": [
+                                "interpolate", ["linear"], ["zoom"],
+                                14.75, 0,
+                                15.25, 1
+                            ],
+                            "circle-stroke-opacity": [
+                                "interpolate", ["linear"], ["zoom"],
+                                14.75, 0,
+                                15.25, 1
+                            ],
                         }}
                     />
                 </Source>
+
+                {/* GeoJSON source with clustering (visible at low zoom) */}
+                {showClusters && (
+                    <Source
+                        id="cluster-source"
+                        type="geojson"
+                        data={clusterData}
+                        cluster={true}
+                        clusterRadius={CLUSTER_RADIUS}
+                        clusterMaxZoom={CLUSTER_MAX_ZOOM}
+                    >
+                        {/* Cluster circles */}
+                        <Layer
+                            id="clusters"
+                            type="circle"
+                            filter={["has", "point_count"]}
+                            paint={{
+                                "circle-color": CLUSTER_COLOR,
+                                "circle-radius": [
+                                    "step", ["get", "point_count"],
+                                    16,
+                                    10, 20,
+                                    50, 24,
+                                    100, 28
+                                ],
+                                "circle-stroke-width": 2,
+                                "circle-stroke-color": "#fff",
+                                "circle-opacity": [
+                                    "interpolate", ["linear"], ["zoom"],
+                                    14.75, 1,
+                                    15.25, 0
+                                ],
+                                "circle-stroke-opacity": [
+                                    "interpolate", ["linear"], ["zoom"],
+                                    14.75, 1,
+                                    15.25, 0
+                                ],
+                            }}
+                        />
+
+                        {/* Cluster count labels */}
+                        <Layer
+                            id="cluster-count"
+                            type="symbol"
+                            filter={["has", "point_count"]}
+                            layout={{
+                                "text-field": "{point_count_abbreviated}",
+                                "text-font": ["Open Sans Bold"],
+                                "text-size": 12,
+                            }}
+                            paint={{
+                                "text-color": CLUSTER_TEXT_COLOR,
+                                "text-opacity": [
+                                    "interpolate", ["linear"], ["zoom"],
+                                    14.75, 1,
+                                    15.25, 0
+                                ],
+                            }}
+                        />
+
+                        {/* Unclustered points (individual at low zoom) */}
+                        <Layer
+                            id="unclustered-point"
+                            type="circle"
+                            filter={["!", ["has", "point_count"]]}
+                            paint={{
+                                "circle-color": [
+                                    "case",
+                                    ["get", "is_claimed"], "#8b5cf6",
+                                    "#3b82f6"
+                                ],
+                                "circle-radius": 4,
+                                "circle-stroke-width": 1,
+                                "circle-stroke-color": "#fff",
+                                "circle-opacity": [
+                                    "interpolate", ["linear"], ["zoom"],
+                                    14.75, 1,
+                                    15.25, 0
+                                ],
+                                "circle-stroke-opacity": [
+                                    "interpolate", ["linear"], ["zoom"],
+                                    14.75, 1,
+                                    15.25, 0
+                                ],
+                            }}
+                        />
+                    </Source>
+                )}
 
                 {/* GeoJSON source for user's claimed properties (green overlay) */}
                 <Source
@@ -263,19 +443,15 @@ export default function PropertyMap() {
                         id="my-claims"
                         type="circle"
                         paint={{
-                            "circle-color": "#22c55e", // green for mine
+                            "circle-color": "#22c55e",
                             "circle-radius": [
-                                "interpolate",
-                                ["linear"],
-                                ["zoom"],
+                                "interpolate", ["linear"], ["zoom"],
                                 8, 3,
                                 12, 6,
                                 16, 9
                             ],
                             "circle-stroke-width": [
-                                "interpolate",
-                                ["linear"],
-                                ["zoom"],
+                                "interpolate", ["linear"], ["zoom"],
                                 8, 0.5,
                                 12, 2,
                                 16, 2.5
@@ -293,7 +469,7 @@ export default function PropertyMap() {
                     <span className="text-gray-700">
                         {myClaimsData.features.length > 0
                             ? `${myClaimsData.features.length} claimed`
-                            : "Vector tiles active"}
+                            : showClusters ? "Clustered view" : "Vector tiles"}
                     </span>
                 </div>
             </div>
