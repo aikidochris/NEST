@@ -21,7 +21,8 @@ import type { Status } from "./status";
  */
 export const PIN_COLORS: Record<Status, string> = {
     unclaimed: "#D1D5DB",       // Light grey - calm, structural
-    claimed: "#9CA3AF",         // Medium grey - owner with no public intent
+    claimed: "#9CA3AF",         // Medium grey - deprecated
+    owner_no_status: "#9CA3AF", // Medium grey - claimed with no intent
     open_to_talking: "#007C7C", // Teal - friendly, approachable
     settled: "#8C8C8C",         // Dark grey - not moving
     for_sale: "#E65F52",        // Coral - attention, action
@@ -39,7 +40,8 @@ export const PIN_COLORS: Record<Status, string> = {
  */
 export const PUBLIC_LABELS: Record<Status, string | null> = {
     unclaimed: null,            // Not shown in legend (structural)
-    claimed: null,              // NOT shown publicly
+    claimed: null,              // Deprecated
+    owner_no_status: null,      // NOT shown publicly
     open_to_talking: "Open to Talking",
     settled: "Settled",
     for_sale: "For Sale",
@@ -52,7 +54,8 @@ export const PUBLIC_LABELS: Record<Status, string | null> = {
  */
 export const DEV_LABELS: Record<Status, string> = {
     unclaimed: "Unclaimed",
-    claimed: "Owner (no status)",  // Internal helper label
+    claimed: "Owner (no status)",  // Deprecated
+    owner_no_status: "Owner (no status)",
     open_to_talking: "Open to Talking",
     settled: "Settled",
     for_sale: "For Sale",
@@ -74,7 +77,8 @@ interface ChipStyle {
  */
 export const CHIP_STYLES: Record<Status, ChipStyle> = {
     unclaimed: { bg: "bg-gray-100", text: "text-gray-500" },
-    claimed: { bg: "bg-gray-100", text: "text-gray-600" },
+    claimed: { bg: "bg-gray-100", text: "text-gray-600" },  // Deprecated
+    owner_no_status: { bg: "bg-gray-100", text: "text-gray-600" },
     open_to_talking: { bg: "bg-teal-100", text: "text-teal-800" },
     settled: { bg: "bg-gray-200", text: "text-gray-700" },
     for_sale: { bg: "bg-red-100", text: "text-red-800" },
@@ -88,6 +92,9 @@ export const CHIP_STYLES: Record<Status, ChipStyle> = {
 
 /**
  * Get pin color for a status.
+ * 
+ * Pin colour MUST be derived from intent_flags only.
+ * Do not set colours in layer paint props.
  */
 export function getPinColor(status: Status): string {
     return PIN_COLORS[status] ?? PIN_COLORS.unclaimed;
@@ -126,5 +133,5 @@ export function getPublicLegendStatuses(): Status[] {
  * Get all statuses for dev/internal views.
  */
 export function getAllStatuses(): Status[] {
-    return ["unclaimed", "claimed", "open_to_talking", "settled", "for_sale", "for_rent", "unknown"];
+    return ["unclaimed", "owner_no_status", "claimed", "open_to_talking", "settled", "for_sale", "for_rent", "unknown"];
 }

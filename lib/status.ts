@@ -16,6 +16,7 @@ export type IntentFlags = {
 /**
  * Property status enum.
  * "unknown" is debug-only; never shown as a user-facing status.
+ * "owner_no_status" is claimed with no explicit intent (grey pin).
  */
 export type Status =
     | "unclaimed"
@@ -23,21 +24,22 @@ export type Status =
     | "settled"
     | "for_sale"
     | "for_rent"
-    | "claimed"
+    | "owner_no_status"
+    | "claimed"  // deprecated - use owner_no_status
     | "unknown";
 
 /**
  * Resolve the display status from claim and intent flags.
  * 
- * Precedence:
- * 1. is_claimed === false → "unclaimed"
- * 2. is_claimed === null → "unknown" (debug-only)
- * 3. is_claimed === true:
- *    - settled true → "settled"
- *    - is_for_sale true → "for_sale"
- *    - is_for_rent true → "for_rent"
- *    - soft_listing true → "open_to_talking"
- *    - else → "claimed"
+ * Precedence for claimed properties:
+ * 1. is_for_sale → "for_sale"
+ * 2. is_for_rent → "for_rent"  
+ * 3. soft_listing → "open_to_talking"
+ * 4. settled → "settled"
+ * 5. claimed with no intent → "owner_no_status"
+ * 
+ * Unclaimed properties → "unclaimed"
+ * Unknown claim state → "unknown" (debug)
  */
 export function resolveStatus(input: {
     is_claimed: boolean | null;
@@ -52,12 +54,14 @@ export function resolveStatus(input: {
     if (is_claimed === null || is_claimed === undefined) return "unknown";
 
     // Claimed property (is_claimed === true) - check intent flags
+    // Priority: for_sale > for_rent > open_to_talking > settled
     const flags = intent_flags ?? {};
 
-    if (flags.settled === true) return "settled";
     if (flags.is_for_sale === true) return "for_sale";
     if (flags.is_for_rent === true) return "for_rent";
     if (flags.soft_listing === true) return "open_to_talking";
+    if (flags.settled === true) return "settled";
 
-    return "claimed";
+    // Claimed with no explicit intent - grey pin
+    return "owner_no_status";
 }

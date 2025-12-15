@@ -94,6 +94,16 @@ export const PIN_SEMANTIC_STYLES: Record<ExtendedStatus, PinSemanticStyle> = {
         badge: { show: false, color: "" },
         ring: { show: false, width: 0, color: "" },
     },
+    owner_no_status: {
+        radius: 6,
+        fillColor: PIN_COLORS.owner_no_status,
+        hollow: false,
+        strokeWidth: 1.5,
+        strokeColor: DEFAULT_STROKE_COLOR,
+        strokeStyle: "solid",
+        badge: { show: false, color: "" },
+        ring: { show: false, width: 0, color: "" },
+    },
     open_to_talking: {
         radius: 6,
         fillColor: PIN_COLORS.open_to_talking,

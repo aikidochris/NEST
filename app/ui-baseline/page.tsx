@@ -18,6 +18,8 @@ import {
     type ExtendedStatus,
     type PinSemanticStyle,
 } from "@/lib/pinStyles";
+import { PropertyImage } from "@/components/PropertyImage";
+import type { PropertyPublic } from "@/types/property";
 
 // =============================================================================
 // STATUS CHIP COMPONENT
@@ -136,29 +138,104 @@ function getSurfaceClass(glassMode: boolean): string {
 }
 
 // =============================================================================
-// EXPANDED CARD PLACEHOLDER
+// EXPANDED PROPERTY CARD PREVIEW (matches real PropertyCardSheet)
 // =============================================================================
 
-function ExpandedCardPlaceholder({ glassMode }: { glassMode: boolean }) {
+// Placeholder image SVG data URL
+const PLACEHOLDER_IMAGE = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='400' height='200' viewBox='0 0 400 200'%3E%3Crect fill='%23E5E7EB' width='400' height='200'/%3E%3Cpath d='M160 80h80v40h-80z' fill='%23D1D5DB'/%3E%3Ccircle cx='200' cy='70' r='20' fill='%23D1D5DB'/%3E%3Cpath d='M140 140h120l-30-40-20 25-15-15z' fill='%23D1D5DB'/%3E%3C/svg%3E";
+
+interface ExpandedPropertyCardPreviewProps {
+    glassMode: boolean;
+    hasPhoto?: boolean;
+    hasMorePhotos?: boolean;
+    isClaimed?: boolean;
+    intentStatuses?: Status[];
+    storyPreview?: string;
+}
+
+function ExpandedPropertyCardPreview({
+    glassMode,
+    hasPhoto = false,
+    hasMorePhotos = false,
+    isClaimed = true,
+    intentStatuses = ["open_to_talking"],
+    storyPreview = "We've been in this home for about five years now. Great neighbours on both sides, and the park at the end of the street is perfect for morning walks.",
+}: ExpandedPropertyCardPreviewProps) {
+    const heroImage = hasPhoto
+        ? "https://images.unsplash.com/photo-1518780664697-55e3ad937233?w=400&h=200&fit=crop"
+        : PLACEHOLDER_IMAGE;
+
     return (
-        <div className={`rounded-xl shadow-lg w-full max-w-[420px] p-6 ${getSurfaceClass(glassMode)}`}>
-            <div className="flex items-start justify-between mb-4">
-                <div>
-                    <h2 className="text-lg font-semibold text-gray-900">Home</h2>
-                    <p className="text-sm text-gray-500">42 Oak Street, NE1 4AB</p>
-                </div>
-                <button className="p-1 text-gray-400 hover:text-gray-600" aria-label="Close">
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <div className={`rounded-xl shadow-lg w-full max-w-[420px] overflow-hidden ${getSurfaceClass(glassMode)}`}>
+            {/* Hero Image - always present, never collapses */}
+            <div className="relative w-full h-40 bg-gray-100">
+                <img
+                    src={heroImage}
+                    alt="42 Oak Street"
+                    className="w-full h-full object-cover"
+                />
+                {/* Close button overlay */}
+                <button
+                    className="absolute top-3 right-3 p-2 bg-black/40 hover:bg-black/60 rounded-full text-white"
+                    aria-label="Close"
+                >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                     </svg>
                 </button>
+                {/* Photos available indicator */}
+                {hasMorePhotos && (
+                    <div className="absolute bottom-2 right-2 px-2 py-1 bg-black/50 text-white text-xs rounded">
+                        Photos available
+                    </div>
+                )}
             </div>
-            <div className="h-32 bg-gray-100 rounded-lg flex items-center justify-center mb-4">
-                <span className="text-gray-400 text-sm">Expanded view content</span>
+
+            {/* Card content */}
+            <div className="px-4 py-4">
+                {/* Property title */}
+                <h2 className="text-lg font-semibold text-gray-900 mb-2">42 Oak Street, NE1 4AB</h2>
+
+                {/* Home Story preview (first-person tone) */}
+                <p className="text-gray-600 text-sm leading-relaxed mb-4 line-clamp-3">
+                    {storyPreview}
+                </p>
+
+                {/* Intent chips */}
+                {intentStatuses.length > 0 && (
+                    <div className="flex flex-wrap gap-2 mb-4">
+                        {intentStatuses.map((status) => {
+                            const { bg, text } = getChipStyle(status);
+                            const label = getPublicLabel(status);
+                            if (!label) return null;
+                            return (
+                                <span
+                                    key={status}
+                                    className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-full ${bg} ${text}`}
+                                >
+                                    <span
+                                        className="w-2 h-2 rounded-full"
+                                        style={{ backgroundColor: getPinColor(status) }}
+                                    />
+                                    {label}
+                                </span>
+                            );
+                        })}
+                    </div>
+                )}
+
+                {/* Primary action button */}
+                <button className="w-full py-2.5 px-4 bg-gray-900 text-white text-sm font-medium rounded-lg hover:bg-gray-800 transition-colors">
+                    View home
+                </button>
+
+                {/* Claim prompt for unclaimed */}
+                {!isClaimed && (
+                    <p className="mt-3 text-center text-xs text-gray-400">
+                        Is this your home? <span className="text-blue-600">Sign in to claim</span>
+                    </p>
+                )}
             </div>
-            <button className="w-full py-2 px-4 bg-blue-500 text-white rounded-md">
-                View home
-            </button>
         </div>
     );
 }
@@ -696,7 +773,7 @@ export default function UIBaselinePage() {
 
                         {/* Expanded Card - center */}
                         <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 z-10">
-                            <ExpandedCardPlaceholder glassMode={glassMode} />
+                            <ExpandedPropertyCardPreview glassMode={glassMode} />
                         </div>
 
                         {/* Small Property Card - bottom center */}
@@ -730,6 +807,191 @@ export default function UIBaselinePage() {
                         {/* Pin count indicator */}
                         <div className="absolute top-4 left-4 px-2 py-1 bg-black/60 text-white text-xs rounded z-20">
                             {SAMPLE_PINS.length} pins
+                        </div>
+                    </div>
+                </section>
+
+                {/* 2-Tier Property Card System Preview */}
+                <section className={`rounded-lg p-6 mb-8 border ${darkMode ? "bg-gray-800 border-gray-700" : "bg-white border-gray-200"}`}>
+                    <h2 className={`text-xl font-semibold mb-4 ${darkMode ? "text-white" : "text-gray-900"}`}>
+                        🏠 2-Tier Property Card System
+                    </h2>
+                    <p className={`text-sm mb-6 ${darkMode ? "text-gray-400" : "text-gray-500"}`}>
+                        Tier 1 (S04): Preview cards. Tier 2 (S06): Full profile modal. All states shown below.
+                    </p>
+
+                    {/* PropertyImage Component States */}
+                    <div className="mb-8">
+                        <h3 className={`text-lg font-medium mb-4 ${darkMode ? "text-gray-200" : "text-gray-800"}`}>
+                            PropertyImage Component
+                        </h3>
+                        <div className="grid grid-cols-3 gap-4">
+                            {/* Placeholder */}
+                            <div>
+                                <PropertyImage
+                                    src={null}
+                                    alt="Placeholder"
+                                    aspectRatio="16:9"
+                                />
+                                <p className={`text-xs mt-2 ${darkMode ? "text-gray-400" : "text-gray-500"}`}>
+                                    Placeholder (no photo)
+                                </p>
+                            </div>
+                            {/* Cover photo */}
+                            <div>
+                                <PropertyImage
+                                    src="https://images.unsplash.com/photo-1518780664697-55e3ad937233?w=400&h=225&fit=crop"
+                                    alt="Cover photo"
+                                    aspectRatio="16:9"
+                                />
+                                <p className={`text-xs mt-2 ${darkMode ? "text-gray-400" : "text-gray-500"}`}>
+                                    Cover photo
+                                </p>
+                            </div>
+                            {/* Locked tile */}
+                            <div>
+                                <PropertyImage
+                                    src={null}
+                                    alt="Locked"
+                                    aspectRatio="16:9"
+                                    isLocked={true}
+                                />
+                                <p className={`text-xs mt-2 ${darkMode ? "text-gray-400" : "text-gray-500"}`}>
+                                    Locked album tile
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Tier 1 Card Previews */}
+                    <div className="mb-8">
+                        <h3 className={`text-lg font-medium mb-4 ${darkMode ? "text-gray-200" : "text-gray-800"}`}>
+                            Tier 1: Preview Cards (Static)
+                        </h3>
+                        <div className="grid grid-cols-2 gap-6">
+                            {/* Unclaimed - no photo */}
+                            <div className="bg-white dark:bg-gray-900 rounded-xl shadow-lg overflow-hidden max-w-[380px]">
+                                <PropertyImage src={null} alt="Unclaimed property" aspectRatio="16:9" />
+                                <div className="p-4">
+                                    <h4 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
+                                        15 Maple Lane, SW2 3DE
+                                    </h4>
+                                    <p className="text-gray-600 dark:text-gray-400 text-sm leading-relaxed mb-4 line-clamp-3">
+                                        This home hasn&apos;t been claimed yet. If you live here, you can claim it and share your story with the neighborhood.
+                                    </p>
+                                    <button className="w-full py-2.5 px-4 bg-gray-900 dark:bg-white text-white dark:text-gray-900 text-sm font-medium rounded-lg">
+                                        View home
+                                    </button>
+                                </div>
+                            </div>
+
+                            {/* Claimed - Open to Talking */}
+                            <div className="bg-white dark:bg-gray-900 rounded-xl shadow-lg overflow-hidden max-w-[380px]">
+                                <div className="relative">
+                                    <PropertyImage
+                                        src="https://images.unsplash.com/photo-1518780664697-55e3ad937233?w=400&h=225&fit=crop"
+                                        alt="Open to talking property"
+                                        aspectRatio="16:9"
+                                    />
+                                    <div className="absolute bottom-3 right-3 px-2 py-1 bg-black/50 text-white text-xs rounded">
+                                        Photos available
+                                    </div>
+                                </div>
+                                <div className="p-4">
+                                    <h4 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
+                                        42 Oak Street, NE1 4AB
+                                    </h4>
+                                    <p className="text-gray-600 dark:text-gray-400 text-sm leading-relaxed mb-4 line-clamp-3">
+                                        We&apos;ve been here for five years. Love the community feel and the park at the end of the street.
+                                    </p>
+                                    <div className="flex flex-wrap gap-2 mb-4">
+                                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-full bg-teal-100 text-teal-800">
+                                            <span className="w-2 h-2 rounded-full bg-teal-600" />
+                                            Open to Talking
+                                        </span>
+                                    </div>
+                                    <button className="w-full py-2.5 px-4 bg-gray-900 dark:bg-white text-white dark:text-gray-900 text-sm font-medium rounded-lg">
+                                        View home
+                                    </button>
+                                </div>
+                            </div>
+
+                            {/* Claimed - For Sale */}
+                            <div className="bg-white dark:bg-gray-900 rounded-xl shadow-lg overflow-hidden max-w-[380px]">
+                                <PropertyImage
+                                    src="https://images.unsplash.com/photo-1564013799919-ab600027ffc6?w=400&h=225&fit=crop"
+                                    alt="For sale property"
+                                    aspectRatio="16:9"
+                                />
+                                <div className="p-4">
+                                    <h4 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
+                                        8 Willow Court, EC4 7PQ
+                                    </h4>
+                                    <p className="text-gray-600 dark:text-gray-400 text-sm leading-relaxed mb-4 line-clamp-3">
+                                        Time to move on! This home has been perfect for our growing family but we&apos;re relocating.
+                                    </p>
+                                    <div className="flex flex-wrap gap-2 mb-4">
+                                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-full bg-red-100 text-red-800">
+                                            <span className="w-2 h-2 rounded-full bg-red-500" />
+                                            For Sale
+                                        </span>
+                                    </div>
+                                    <button className="w-full py-2.5 px-4 bg-gray-900 dark:bg-white text-white dark:text-gray-900 text-sm font-medium rounded-lg">
+                                        View home
+                                    </button>
+                                </div>
+                            </div>
+
+                            {/* Claimed - Settled */}
+                            <div className="bg-white dark:bg-gray-900 rounded-xl shadow-lg overflow-hidden max-w-[380px]">
+                                <PropertyImage
+                                    src="https://images.unsplash.com/photo-1600596542815-ffad4c1539a9?w=400&h=225&fit=crop"
+                                    alt="Settled property"
+                                    aspectRatio="16:9"
+                                />
+                                <div className="p-4">
+                                    <h4 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
+                                        27 Cedar Road, N1 5TG
+                                    </h4>
+                                    <p className="text-gray-600 dark:text-gray-400 text-sm leading-relaxed mb-4 line-clamp-3">
+                                        This is our forever home. We&apos;re not going anywhere and love being part of this street.
+                                    </p>
+                                    <div className="flex flex-wrap gap-2 mb-4">
+                                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-full bg-gray-200 text-gray-700">
+                                            <span className="w-2 h-2 rounded-full bg-gray-500" />
+                                            Settled
+                                        </span>
+                                    </div>
+                                    <button className="w-full py-2.5 px-4 bg-gray-900 dark:bg-white text-white dark:text-gray-900 text-sm font-medium rounded-lg">
+                                        View home
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Tier 2 Action Logic */}
+                    <div className={`p-4 rounded-lg ${darkMode ? "bg-gray-700" : "bg-amber-50"}`}>
+                        <h3 className={`text-lg font-medium mb-3 ${darkMode ? "text-gray-200" : "text-gray-800"}`}>
+                            Tier 2: Conditional Primary Action
+                        </h3>
+                        <div className="grid grid-cols-2 gap-4 text-sm">
+                            <div>
+                                <p className={`font-medium ${darkMode ? "text-gray-300" : "text-gray-700"}`}>Unclaimed:</p>
+                                <p className={darkMode ? "text-gray-400" : "text-gray-600"}>Primary = &quot;Claim this home&quot;</p>
+                            </div>
+                            <div>
+                                <p className={`font-medium ${darkMode ? "text-gray-300" : "text-gray-700"}`}>Open to Talking / For Sale / For Rent:</p>
+                                <p className={darkMode ? "text-gray-400" : "text-gray-600"}>Primary = &quot;Message owner&quot;</p>
+                            </div>
+                            <div>
+                                <p className={`font-medium ${darkMode ? "text-gray-300" : "text-gray-700"}`}>Settled:</p>
+                                <p className={darkMode ? "text-gray-400" : "text-gray-600"}>Primary = &quot;Follow&quot;</p>
+                            </div>
+                            <div>
+                                <p className={`font-medium ${darkMode ? "text-gray-300" : "text-gray-700"}`}>Owner Mode:</p>
+                                <p className={darkMode ? "text-gray-400" : "text-gray-600"}>Tools strip under gallery (collapsible)</p>
+                            </div>
                         </div>
                     </div>
                 </section>

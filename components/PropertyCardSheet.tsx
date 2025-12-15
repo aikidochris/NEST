@@ -1,29 +1,51 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useClaim } from "@/hooks/useClaim";
 import type { PropertyPublic } from "@/types/property";
 import { inspectLog, resolveStatus } from "@/lib/inspect";
+import { PropertyCardPreview, PropertyCardClickOutside } from "./PropertyCardPreview";
+import { PropertyProfileModal } from "./PropertyProfileModal";
+import { supabase } from "@/lib/supabase/client";
+import { isPropertyMine } from "@/lib/ownership";
+import { useMapIntent } from "@/contexts/MapIntentContext";
+import { persistOwnerStatus, type OwnerStatus } from "@/lib/intent";
+
+// =============================================================================
+// PROPERTY CARD SHEET
+// Container component that manages Tier 1 (Preview) and Tier 2 (Modal) states.
+// =============================================================================
 
 interface PropertyCardSheetProps {
     /** Property ID to fetch details for */
     propertyId: string;
+    /** Callback when card is closed */
     onClose: () => void;
+    /** Callback after successful claim */
     onClaimSuccess: () => void;
+    /** Whether to use mobile layout */
+    isMobile?: boolean;
 }
 
 /**
- * Bottom sheet card for selected property.
- * Fetches property details by ID and shows claim action.
+ * Property card container that shows Tier 1 preview and opens Tier 2 modal.
+ * Handles data fetching and state management.
  */
-export function PropertyCardSheet({ propertyId, onClose, onClaimSuccess }: PropertyCardSheetProps) {
+export function PropertyCardSheet({
+    propertyId,
+    onClose,
+    onClaimSuccess,
+    isMobile = false,
+}: PropertyCardSheetProps) {
+    const router = useRouter();
     const { claim, claiming, error: claimError, isAuthenticated } = useClaim();
+    const { refreshIntentOverlay } = useMapIntent();
     const [property, setProperty] = useState<PropertyPublic | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [justClaimed, setJustClaimed] = useState(false);
-    const [isExpanded, setIsExpanded] = useState(false);
+    const [showModal, setShowModal] = useState(false);
 
     // Fetch property details
     useEffect(() => {
@@ -59,7 +81,12 @@ export function PropertyCardSheet({ propertyId, onClose, onClaimSuccess }: Prope
                         throw new Error("Property not found");
                     }
 
-                    setProperty(propertyData);
+                    // Check ownership via property_claims table
+                    const isMine = await isPropertyMine(supabase, propertyId);
+
+                    // Enrich with ownership status
+                    const enrichedProperty = { ...propertyData, is_mine: isMine } as PropertyPublic;
+                    setProperty(enrichedProperty);
                 }
             } catch (err) {
                 if (!cancelled) {
@@ -79,13 +106,6 @@ export function PropertyCardSheet({ propertyId, onClose, onClaimSuccess }: Prope
         };
     }, [propertyId]);
 
-    // Build display title
-    const title = property
-        ? property.display_label ||
-        [property.house_number, property.street, property.postcode].filter(Boolean).join(", ") ||
-        "Property"
-        : "Loading...";
-
     // Clear justClaimed message after 2 seconds
     useEffect(() => {
         if (justClaimed) {
@@ -94,27 +114,16 @@ export function PropertyCardSheet({ propertyId, onClose, onClaimSuccess }: Prope
         }
     }, [justClaimed]);
 
-    const handleClaim = useCallback(async () => {
-        const success = await claim(propertyId);
-        if (success) {
-            setJustClaimed(true);
-            if (property) {
-                setProperty({ ...property, is_claimed: true, is_mine: true });
-            }
-            onClaimSuccess();
-        }
-    }, [claim, propertyId, property, onClaimSuccess]);
-
-    // Handle View home click - opens expanded view and logs
+    // Handle View home click - opens Tier 2 modal
     const handleViewHome = useCallback(() => {
-        setIsExpanded(true);
+        setShowModal(true);
 
         // Log PROPERTY_DETAILS when View home is clicked
         if (property) {
             inspectLog("PROPERTY_DETAILS", {
                 property_id: property.property_id,
                 is_claimed: property.is_claimed,
-                source: "small_card_view_home",
+                source: "tier1_view_home",
                 intent_flags: {
                     soft_listing: property.is_open_to_talking ?? null,
                     settled: property.is_settled ?? null,
@@ -134,73 +143,153 @@ export function PropertyCardSheet({ propertyId, onClose, onClaimSuccess }: Prope
         }
     }, [property]);
 
-    // Close expanded view
-    const handleCloseExpanded = useCallback(() => {
-        setIsExpanded(false);
+    // Handle claim action
+    const handleClaim = useCallback(async () => {
+        const success = await claim(propertyId);
+        if (success) {
+            setJustClaimed(true);
+            if (property) {
+                setProperty({ ...property, is_claimed: true, is_mine: true });
+            }
+            // Trigger map pin refresh
+            refreshIntentOverlay(propertyId);
+            onClaimSuccess();
+        }
+    }, [claim, propertyId, property, onClaimSuccess, refreshIntentOverlay]);
+
+    // Handle message action - navigate to messages page
+    const handleMessage = useCallback(() => {
+        if (!property) return;
+
+        inspectLog("MESSAGE_OWNER", {
+            property_id: property.property_id,
+        });
+
+        // Determine intent status for messaging context
+        let intentStatus = "";
+        if (property.is_open_to_talking) intentStatus = "open_to_talking";
+        else if (property.is_for_sale) intentStatus = "for_sale";
+        else if (property.is_for_rent) intentStatus = "for_rent";
+        else if (property.is_settled) intentStatus = "settled";
+
+        // Build title
+        const title = property.display_label ||
+            [property.house_number, property.street, property.postcode].filter(Boolean).join(", ") ||
+            "Property";
+
+        // Navigate to messages with property context
+        const params = new URLSearchParams({
+            property_id: property.property_id,
+            title: title,
+            ...(intentStatus && { status: intentStatus }),
+        });
+
+        router.push(`/messages?${params.toString()}`);
+    }, [property, router]);
+
+    // Handle follow action (placeholder)
+    const handleFollow = useCallback(() => {
+        inspectLog("FOLLOW_PROPERTY", {
+            property_id: property?.property_id,
+        });
+        // TODO: Implement follow functionality
+    }, [property]);
+
+    // Handle status update (owner)
+    const handleStatusUpdate = useCallback(async (status: string) => {
+        if (!property) return;
+
+        inspectLog("OWNER_STATUS_UPDATE", {
+            property_id: property.property_id,
+            new_status: status,
+        });
+
+        // Update local state optimistically
+        setProperty(prev => prev ? {
+            ...prev,
+            is_open_to_talking: status === "open_to_talking",
+            is_for_sale: status === "for_sale",
+            is_for_rent: status === "for_rent",
+            is_settled: status === "settled",
+        } : null);
+
+        // Persist to Supabase intent_flags table
+        const success = await persistOwnerStatus(
+            supabase,
+            property.property_id,
+            status as OwnerStatus
+        );
+
+        if (success) {
+            console.log("[Owner] Status persisted to database:", status);
+        } else {
+            console.error("[Owner] Failed to persist status");
+        }
+
+        // Trigger map pin refresh (will re-fetch from DB)
+        refreshIntentOverlay(property.property_id);
+    }, [property, refreshIntentOverlay]);
+
+    // Handle story update (owner)
+    const handleStoryUpdate = useCallback(async (story: string) => {
+        if (!property) return;
+
+        inspectLog("OWNER_STORY_UPDATE", {
+            property_id: property.property_id,
+        });
+
+        // Update local state
+        setProperty(prev => prev ? { ...prev, summary_text: story } : null);
+
+        // TODO: Call API to persist story change
+        console.log("[Owner] Story updated:", story.substring(0, 50) + "...");
+    }, [property]);
+
+    // Handle cover photo upload (owner)
+    const handleCoverUpload = useCallback(async (file: File) => {
+        if (!property) return;
+
+        inspectLog("OWNER_COVER_UPLOAD", {
+            property_id: property.property_id,
+            file_name: file.name,
+            file_size: file.size,
+        });
+
+        // TODO: Upload to storage and update property
+        console.log("[Owner] Cover upload:", file.name, file.size);
+    }, [property]);
+
+    // Close modal
+    const handleCloseModal = useCallback(() => {
+        setShowModal(false);
     }, []);
 
-    // Show claimed state if property is claimed OR we just claimed it
-    const isClaimed = property?.is_claimed || justClaimed;
-
-    // Expanded placeholder panel
-    if (isExpanded) {
+    // Loading state
+    if (loading) {
         return (
-            <div className="fixed bottom-0 left-0 right-0 z-50 flex justify-center p-4 pointer-events-none">
-                <div className="bg-white rounded-t-xl shadow-lg w-full max-w-[420px] pointer-events-auto">
-                    {/* Header */}
-                    <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
-                        <h2 className="font-semibold text-gray-900">Home</h2>
-                        <button
-                            onClick={handleCloseExpanded}
-                            className="p-1 text-gray-400 hover:text-gray-600"
-                            aria-label="Close"
-                        >
-                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                            </svg>
-                        </button>
-                    </div>
-
-                    {/* Placeholder body */}
-                    <div className="p-6 text-center">
-                        <p className="text-gray-500">Expanded view coming soon</p>
-                        {property && (
-                            <p className="mt-2 text-sm text-gray-400 truncate">{title}</p>
-                        )}
-                    </div>
+            <div className="absolute top-20 right-4 w-[380px] bg-white dark:bg-gray-900 rounded-xl shadow-xl overflow-hidden z-40 animate-pulse">
+                <div className="w-full h-48 bg-gray-200 dark:bg-gray-700" />
+                <div className="p-4">
+                    <div className="h-5 bg-gray-200 dark:bg-gray-700 rounded w-3/4 mb-3" />
+                    <div className="h-4 bg-gray-100 dark:bg-gray-800 rounded w-full mb-2" />
+                    <div className="h-4 bg-gray-100 dark:bg-gray-800 rounded w-5/6 mb-4" />
+                    <div className="h-10 bg-gray-200 dark:bg-gray-700 rounded" />
                 </div>
             </div>
         );
     }
 
-    // Small card view
-    return (
-        <div className="fixed bottom-0 left-0 right-0 z-50 flex justify-center p-4 pointer-events-none">
-            <div className="bg-white rounded-t-xl shadow-lg w-full max-w-[420px] p-4 pointer-events-auto">
-                {/* Header with close button */}
+    // Error state
+    if (error || !property) {
+        return (
+            <div className="absolute top-20 right-4 w-[380px] bg-white dark:bg-gray-900 rounded-xl shadow-xl p-4 z-40">
                 <div className="flex items-start justify-between mb-3">
-                    <div className="flex-1 min-w-0">
-                        <h2 className="text-lg font-semibold text-gray-900 truncate">{title}</h2>
-                        {/* Status badge */}
-                        {!loading && property && (
-                            <span
-                                className={`inline-block mt-1 px-2 py-0.5 text-xs font-medium rounded ${isClaimed
-                                    ? "bg-green-100 text-green-800"
-                                    : "bg-gray-100 text-gray-600"
-                                    }`}
-                            >
-                                {isClaimed ? "Claimed" : "Unclaimed"}
-                            </span>
-                        )}
-                        {loading && (
-                            <span className="inline-block mt-1 px-2 py-0.5 text-xs font-medium rounded bg-blue-100 text-blue-600">
-                                Loading...
-                            </span>
-                        )}
-                    </div>
+                    <p className="text-sm text-red-600 dark:text-red-400">
+                        {error || "Property not found"}
+                    </p>
                     <button
                         onClick={onClose}
-                        className="ml-2 p-1 text-gray-400 hover:text-gray-600"
+                        className="p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
                         aria-label="Close"
                     >
                         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -208,51 +297,37 @@ export function PropertyCardSheet({ propertyId, onClose, onClaimSuccess }: Prope
                         </svg>
                     </button>
                 </div>
-
-                {/* Error message */}
-                {error && (
-                    <p className="text-sm text-red-600 mb-3">{error}</p>
-                )}
-
-                {/* Success message */}
-                {justClaimed && (
-                    <p className="text-sm text-green-600 mb-3">Claimed successfully!</p>
-                )}
-
-                {/* Claim error message */}
-                {claimError && (
-                    <p className="text-sm text-red-600 mb-3">{claimError}</p>
-                )}
-
-                {/* Primary action - View home */}
-                <button
-                    onClick={handleViewHome}
-                    disabled={loading || !property}
-                    className="w-full py-2 px-4 bg-blue-500 text-white rounded-md hover:bg-blue-600 transition-colors mb-2 disabled:opacity-50"
-                >
-                    View home
-                </button>
-
-                {/* Claim link - hide if claimed or loading */}
-                {!loading && property && !isClaimed && (
-                    !isAuthenticated ? (
-                        <Link
-                            href="/auth/login"
-                            className="block text-center text-sm text-blue-600 hover:text-blue-800"
-                        >
-                            Sign in to claim
-                        </Link>
-                    ) : (
-                        <button
-                            onClick={handleClaim}
-                            disabled={claiming}
-                            className="w-full text-center text-sm text-blue-600 hover:text-blue-800 disabled:opacity-50"
-                        >
-                            {claiming ? "Claiming..." : "Is this your home? Claim ownership"}
-                        </button>
-                    )
-                )}
             </div>
-        </div>
+        );
+    }
+
+    return (
+        <>
+            {/* Tier 1 - Preview Card */}
+            <PropertyCardClickOutside onClickOutside={onClose}>
+                <PropertyCardPreview
+                    property={property}
+                    onClose={onClose}
+                    onViewHome={handleViewHome}
+                    isMobile={isMobile}
+                />
+            </PropertyCardClickOutside>
+
+            {/* Tier 2 - Profile Modal */}
+            {showModal && (
+                <PropertyProfileModal
+                    property={property}
+                    onClose={handleCloseModal}
+                    isAuthenticated={isAuthenticated}
+                    onClaim={handleClaim}
+                    onMessage={handleMessage}
+                    onFollow={handleFollow}
+                    onStatusUpdate={handleStatusUpdate}
+                    onStoryUpdate={handleStoryUpdate}
+                    onCoverUpload={handleCoverUpload}
+                />
+            )}
+        </>
     );
 }
+

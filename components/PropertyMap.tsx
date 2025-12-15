@@ -11,6 +11,7 @@ import { AreaVibeBar, type VibeStats, type LiveFeedEvent } from "@/components/Ar
 import { useAuth } from "@/app/AuthProvider";
 import { inspectLog, resolveStatus, type Status } from "@/lib/inspect";
 import { getPinColor } from "@/lib/statusStyles";
+import { MapIntentProvider } from "@/contexts/MapIntentContext";
 
 // =============================================================================
 // DESIGN KNOBS - Configurable constants
@@ -75,6 +76,39 @@ interface IntentOverlayData {
     settled: boolean | null;
     is_for_sale: boolean | null;
     is_for_rent: boolean | null;
+}
+
+// =============================================================================
+// LAYER QUERY HELPERS
+// =============================================================================
+
+/** Layer IDs that contain individual property points (non-cluster) */
+const QUERYABLE_POINT_LAYERS = ["property-points", "my-claims"];
+
+/**
+ * Safely query rendered features from multiple layers.
+ * Filters to layers that exist and returns empty array on any error.
+ */
+function safeQueryRenderedFeatures(
+    map: maplibregl.Map,
+    layerIds: string[]
+): maplibregl.MapGeoJSONFeature[] {
+    // Filter to only layers that exist
+    const existing = layerIds.filter((id) => {
+        try {
+            return !!map.getLayer(id);
+        } catch {
+            return false;
+        }
+    });
+
+    if (existing.length === 0) return [];
+
+    try {
+        return map.queryRenderedFeatures(undefined, { layers: existing });
+    } catch {
+        return [];
+    }
 }
 
 export default function PropertyMap() {
@@ -362,19 +396,12 @@ export default function PropertyMap() {
 
         const ids = new Set<string>();
 
-        // Query rendered features from property layers (non-clustered)
-        const layers = ["property-points", "unclustered-point"];
-        for (const layerId of layers) {
-            try {
-                const features = map.queryRenderedFeatures(undefined, { layers: [layerId] });
-                for (const f of features) {
-                    const pid = f.properties?.property_id;
-                    if (typeof pid === "string" && pid.length > 0) {
-                        ids.add(pid);
-                    }
-                }
-            } catch {
-                // Layer might not exist yet
+        // Query all property layers at once using safe query
+        const features = safeQueryRenderedFeatures(map, QUERYABLE_POINT_LAYERS);
+        for (const f of features) {
+            const pid = f.properties?.property_id;
+            if (typeof pid === "string" && pid.length > 0) {
+                ids.add(pid);
             }
         }
 
@@ -413,8 +440,28 @@ export default function PropertyMap() {
                 });
             });
 
+            // Log layer availability once on first idle
+            let hasLoggedLayers = false;
+            const logLayersOnce = () => {
+                if (hasLoggedLayers) return;
+                hasLoggedLayers = true;
+
+                const layersToCheck = [...QUERYABLE_POINT_LAYERS, "clusters", "intent-overlay"];
+                const layerStatus = layersToCheck.map(id => {
+                    try {
+                        return { id, exists: !!map.getLayer(id) };
+                    } catch {
+                        return { id, exists: false };
+                    }
+                });
+                inspectLog("MAP_LAYERS_CHECK", { queried_layers: layerStatus });
+            };
+
             // Capture visible IDs on map idle (after render complete)
-            map.on("idle", captureVisiblePropertyIds);
+            map.on("idle", () => {
+                logLayersOnce();
+                captureVisiblePropertyIds();
+            });
         },
         [fetchMyClaims, fetchClusterData, fetchVibeStats, captureVisiblePropertyIds]
     );
@@ -536,7 +583,20 @@ export default function PropertyMap() {
         setSelectedPropertyId(null);
     }, []);
 
-    // After claim success, refetch my-claims overlay
+    // Refresh intent overlay for a specific property or all visible
+    const refreshIntentForProperty = useCallback((propertyId?: string) => {
+        if (propertyId) {
+            // Fetch intent for specific property and update cache
+            fetchIntentOverlay([propertyId]);
+        } else {
+            // Refresh all visible properties
+            captureVisiblePropertyIds();
+        }
+        // Bump version to trigger overlay re-render
+        setIntentOverlayVersion((v) => v + 1);
+    }, [fetchIntentOverlay, captureVisiblePropertyIds]);
+
+    // After claim success, refetch my-claims overlay and intent
     const handleClaimSuccess = useCallback(() => {
         const map = mapRef.current?.getMap();
         if (map) {
@@ -545,7 +605,11 @@ export default function PropertyMap() {
                 fetchMyClaims(computeBBox(bounds));
             }
         }
-    }, [fetchMyClaims]);
+        // Also refresh intent for the selected property
+        if (selectedPropertyId) {
+            refreshIntentForProperty(selectedPropertyId);
+        }
+    }, [fetchMyClaims, selectedPropertyId, refreshIntentForProperty]);
 
     // Cleanup on unmount
     useEffect(() => {
@@ -597,44 +661,37 @@ export default function PropertyMap() {
         const map = mapRef.current?.getMap();
         if (!map) return { type: "FeatureCollection", features };
 
-        // Get all non-clustered features from property layers
-        const layers = ["property-points", "unclustered-point"];
-        for (const layerId of layers) {
-            try {
-                const renderedFeatures = map.queryRenderedFeatures(undefined, { layers: [layerId] });
-                for (const f of renderedFeatures) {
-                    const pid = f.properties?.property_id;
-                    if (typeof pid !== "string" || pid.length === 0) continue;
+        // Get all non-clustered features from property layers using safe query
+        const renderedFeatures = safeQueryRenderedFeatures(map, QUERYABLE_POINT_LAYERS);
+        for (const f of renderedFeatures) {
+            const pid = f.properties?.property_id;
+            if (typeof pid !== "string" || pid.length === 0) continue;
 
-                    const overlay = intentOverlayRef.current.get(pid);
-                    if (!overlay) continue; // No overlay data yet
+            const overlay = intentOverlayRef.current.get(pid);
+            if (!overlay) continue; // No overlay data yet
 
-                    const geometry = f.geometry as GeoJSON.Point;
-                    if (geometry.type !== "Point") continue;
+            const geometry = f.geometry as GeoJSON.Point;
+            if (geometry.type !== "Point") continue;
 
-                    const status = resolveStatus({
-                        is_claimed: overlay.is_claimed,
-                        intent_flags: {
-                            soft_listing: overlay.soft_listing,
-                            settled: overlay.settled,
-                            is_for_sale: overlay.is_for_sale,
-                            is_for_rent: overlay.is_for_rent,
-                        },
-                    });
+            const status = resolveStatus({
+                is_claimed: overlay.is_claimed,
+                intent_flags: {
+                    soft_listing: overlay.soft_listing,
+                    settled: overlay.settled,
+                    is_for_sale: overlay.is_for_sale,
+                    is_for_rent: overlay.is_for_rent,
+                },
+            });
 
-                    features.push({
-                        type: "Feature",
-                        geometry,
-                        properties: {
-                            property_id: pid,
-                            color: getPinColor(status),
-                            status,
-                        },
-                    });
-                }
-            } catch {
-                // Layer might not exist
-            }
+            features.push({
+                type: "Feature",
+                geometry,
+                properties: {
+                    property_id: pid,
+                    color: getPinColor(status),
+                    status,
+                },
+            });
         }
 
         // Dedupe by property_id (keep first occurrence)
@@ -680,6 +737,21 @@ export default function PropertyMap() {
         if (clusterSource) clusterSource.setData(clusterData);
     }, [myClaimsData, clusterData]);
 
+    // Update intent overlay source when overlayGeoJSON changes (explicit setData for MapLibre repaint)
+    useEffect(() => {
+        const map = mapRef.current?.getMap();
+        if (!map) return;
+
+        const intentSource = map.getSource("intent-overlay-source") as GeoJSONSource | undefined;
+        if (intentSource) {
+            intentSource.setData(overlayGeoJSON);
+            // Ensure overlay layer is on top
+            if (map.getLayer("intent-overlay")) {
+                map.moveLayer("intent-overlay");
+            }
+        }
+    }, [overlayGeoJSON]);
+
     // Show clusters layer only at low zoom
     const showClusters = viewState.zoom <= CLUSTER_MAX_ZOOM;
 
@@ -694,242 +766,212 @@ export default function PropertyMap() {
     }, [selectedPropertyId]);
 
     return (
-        <div className="relative w-full h-screen">
-            <Map
-                ref={mapRef}
-                {...viewState}
-                onMove={(evt) => setViewState(evt.viewState)}
-                onMoveEnd={handleMoveEnd}
-                onLoad={handleLoad}
-                onClick={handleMapClick}
-                interactiveLayerIds={["property-points", "my-claims", "clusters", "unclustered-point", "intent-overlay"]}
-                style={{ width: "100%", height: "100%" }}
-                mapStyle={MAP_STYLE}
-            >
-                {/* Vector tile source for all properties (visible at high zoom) */}
-                <Source
-                    id="properties-vt"
-                    type="vector"
-                    tiles={[`${typeof window !== "undefined" ? window.location.origin : ""}/api/tiles/properties/{z}/{x}/{y}`]}
-                    minzoom={0}
-                    maxzoom={14}
+        <MapIntentProvider onRefresh={refreshIntentForProperty}>
+            <div className="relative w-full h-screen">
+                <Map
+                    ref={mapRef}
+                    {...viewState}
+                    onMove={(evt) => setViewState(evt.viewState)}
+                    onMoveEnd={handleMoveEnd}
+                    onLoad={handleLoad}
+                    onClick={handleMapClick}
+                    interactiveLayerIds={["property-points", "my-claims", "clusters", "unclustered-point", "intent-overlay"]}
+                    style={{ width: "100%", height: "100%" }}
+                    mapStyle={MAP_STYLE}
                 >
-                    <Layer
-                        id="property-points"
-                        type="circle"
-                        source-layer="properties"
-                        minzoom={CLUSTER_MAX_ZOOM}
-                        paint={{
-                            // Neutral colors for base layer - intent overlay adds color
-                            "circle-color": [
-                                "case",
-                                ["get", "is_claimed"], "#9CA3AF",  // Medium grey (owner, no intent)
-                                "#D1D5DB"                          // Light grey (unclaimed, calm)
-                            ],
-                            "circle-radius": [
-                                "interpolate", ["linear"], ["zoom"],
-                                12, 3,
-                                14, 4,
-                                16, 6
-                            ],
-                            "circle-stroke-width": [
-                                "interpolate", ["linear"], ["zoom"],
-                                12, 1,
-                                16, 1.5
-                            ],
-                            "circle-stroke-color": "#fff",
-                            "circle-opacity": [
-                                "interpolate", ["linear"], ["zoom"],
-                                14.75, 0,
-                                15.25, 1
-                            ],
-                            "circle-stroke-opacity": [
-                                "interpolate", ["linear"], ["zoom"],
-                                14.75, 0,
-                                15.25, 1
-                            ],
-                        }}
-                    />
-                </Source>
-
-                {/* GeoJSON source with clustering (visible at low zoom) */}
-                {showClusters && (
+                    {/* Vector tile source for all properties (visible at high zoom) */}
                     <Source
-                        id="cluster-source"
-                        type="geojson"
-                        data={clusterData}
-                        cluster={true}
-                        clusterRadius={CLUSTER_RADIUS}
-                        clusterMaxZoom={CLUSTER_MAX_ZOOM}
+                        id="properties-vt"
+                        type="vector"
+                        tiles={[`${typeof window !== "undefined" ? window.location.origin : ""}/api/tiles/properties/{z}/{x}/{y}`]}
+                        minzoom={0}
+                        maxzoom={14}
                     >
-                        {/* Cluster circles */}
                         <Layer
-                            id="clusters"
+                            id="property-points"
                             type="circle"
-                            filter={["has", "point_count"]}
+                            source-layer="properties"
+                            minzoom={CLUSTER_MAX_ZOOM}
                             paint={{
-                                "circle-color": CLUSTER_COLOR,
+                                // Invisible base layer - intent overlay provides visible pins
+                                // Kept for queryable hit-testing
+                                "circle-color": "#000000",
                                 "circle-radius": [
-                                    "step", ["get", "point_count"],
-                                    16,
-                                    10, 20,
-                                    50, 24,
-                                    100, 28
-                                ],
-                                "circle-stroke-width": 2,
-                                "circle-stroke-color": "#fff",
-                                "circle-opacity": [
                                     "interpolate", ["linear"], ["zoom"],
-                                    14.75, 1,
-                                    15.25, 0
+                                    12, 3,
+                                    14, 4,
+                                    16, 6
                                 ],
-                                "circle-stroke-opacity": [
-                                    "interpolate", ["linear"], ["zoom"],
-                                    14.75, 1,
-                                    15.25, 0
-                                ],
-                            }}
-                        />
-
-                        {/* Cluster count labels */}
-                        <Layer
-                            id="cluster-count"
-                            type="symbol"
-                            filter={["has", "point_count"]}
-                            layout={{
-                                "text-field": "{point_count_abbreviated}",
-                                "text-font": ["Open Sans Bold"],
-                                "text-size": 12,
-                            }}
-                            paint={{
-                                "text-color": CLUSTER_TEXT_COLOR,
-                                "text-opacity": [
-                                    "interpolate", ["linear"], ["zoom"],
-                                    14.75, 1,
-                                    15.25, 0
-                                ],
-                            }}
-                        />
-
-                        {/* Unclustered points (individual at low zoom) */}
-                        <Layer
-                            id="unclustered-point"
-                            type="circle"
-                            filter={["!", ["has", "point_count"]]}
-                            paint={{
-                                // Neutral colors - intent overlay adds color
-                                "circle-color": [
-                                    "case",
-                                    ["get", "is_claimed"], "#9CA3AF",  // Medium grey
-                                    "#D1D5DB"                          // Light grey
-                                ],
-                                "circle-radius": 4,
-                                "circle-stroke-width": 1,
-                                "circle-stroke-color": "#fff",
-                                "circle-opacity": [
-                                    "interpolate", ["linear"], ["zoom"],
-                                    14.75, 1,
-                                    15.25, 0
-                                ],
-                                "circle-stroke-opacity": [
-                                    "interpolate", ["linear"], ["zoom"],
-                                    14.75, 1,
-                                    15.25, 0
-                                ],
+                                "circle-opacity": 0,
+                                "circle-stroke-opacity": 0,
                             }}
                         />
                     </Source>
+
+                    {/* GeoJSON source with clustering (visible at low zoom) */}
+                    {showClusters && (
+                        <Source
+                            id="cluster-source"
+                            type="geojson"
+                            data={clusterData}
+                            cluster={true}
+                            clusterRadius={CLUSTER_RADIUS}
+                            clusterMaxZoom={CLUSTER_MAX_ZOOM}
+                        >
+                            {/* Cluster circles */}
+                            <Layer
+                                id="clusters"
+                                type="circle"
+                                filter={["has", "point_count"]}
+                                paint={{
+                                    "circle-color": CLUSTER_COLOR,
+                                    "circle-radius": [
+                                        "step", ["get", "point_count"],
+                                        16,
+                                        10, 20,
+                                        50, 24,
+                                        100, 28
+                                    ],
+                                    "circle-stroke-width": 2,
+                                    "circle-stroke-color": "#fff",
+                                    "circle-opacity": [
+                                        "interpolate", ["linear"], ["zoom"],
+                                        14.75, 1,
+                                        15.25, 0
+                                    ],
+                                    "circle-stroke-opacity": [
+                                        "interpolate", ["linear"], ["zoom"],
+                                        14.75, 1,
+                                        15.25, 0
+                                    ],
+                                }}
+                            />
+
+                            {/* Cluster count labels */}
+                            <Layer
+                                id="cluster-count"
+                                type="symbol"
+                                filter={["has", "point_count"]}
+                                layout={{
+                                    "text-field": "{point_count_abbreviated}",
+                                    "text-font": ["Open Sans Bold"],
+                                    "text-size": 12,
+                                }}
+                                paint={{
+                                    "text-color": CLUSTER_TEXT_COLOR,
+                                    "text-opacity": [
+                                        "interpolate", ["linear"], ["zoom"],
+                                        14.75, 1,
+                                        15.25, 0
+                                    ],
+                                }}
+                            />
+
+                            {/* Unclustered points (individual at low zoom) */}
+                            <Layer
+                                id="unclustered-point"
+                                type="circle"
+                                filter={["!", ["has", "point_count"]]}
+                                paint={{
+                                    // Invisible base layer - intent overlay provides visible pins
+                                    // Kept for queryable hit-testing
+                                    "circle-color": "#000000",
+                                    "circle-radius": 4,
+                                    "circle-opacity": 0,
+                                    "circle-stroke-opacity": 0,
+                                }}
+                            />
+                        </Source>
+                    )}
+
+                    {/* Intent overlay - status-based colors on top of base pins */}
+                    <Source
+                        id="intent-overlay-source"
+                        type="geojson"
+                        data={overlayGeoJSON}
+                    >
+                        <Layer
+                            id="intent-overlay"
+                            type="circle"
+                            paint={{
+                                "circle-color": ["get", "color"],
+                                "circle-radius": [
+                                    "interpolate", ["linear"], ["zoom"],
+                                    12, 3,
+                                    14, 4,
+                                    16, 6
+                                ],
+                                "circle-stroke-width": [
+                                    "interpolate", ["linear"], ["zoom"],
+                                    12, 1,
+                                    16, 1.5
+                                ],
+                                "circle-stroke-color": "#fff",
+                            }}
+                        />
+                    </Source>
+
+                    {/* GeoJSON source for user's claimed properties (neutral base - intent overlay adds color) */}
+                    <Source
+                        id="my-claims-source"
+                        type="geojson"
+                        data={myClaimsData}
+                    >
+                        <Layer
+                            id="my-claims"
+                            type="circle"
+                            paint={{
+                                // Invisible base layer - intent overlay provides visible pins
+                                // Kept for queryable hit-testing
+                                "circle-color": "#000000",
+                                "circle-radius": [
+                                    "interpolate", ["linear"], ["zoom"],
+                                    8, 3,
+                                    12, 6,
+                                    16, 9
+                                ],
+                                "circle-opacity": 0,
+                                "circle-stroke-opacity": 0,
+                            }}
+                        />
+                    </Source>
+                </Map>
+
+                {/* Top-left controls */}
+                <div className="absolute top-4 left-4 flex flex-col gap-2">
+                    <AuthControls />
+                    <div className="bg-white/90 backdrop-blur-sm rounded-lg px-3 py-2 shadow-md text-sm">
+                        <span className="text-gray-700">
+                            {myClaimsData.features.length > 0
+                                ? `${myClaimsData.features.length} claimed`
+                                : showClusters ? "Clustered view" : "Vector tiles"}
+                        </span>
+                    </div>
+                </div>
+
+                {/* Property card sheet */}
+                {selectedPropertyId && (
+                    <PropertyCardSheet
+                        propertyId={selectedPropertyId}
+                        onClose={handleCloseSheet}
+                        onClaimSuccess={handleClaimSuccess}
+                    />
                 )}
 
-                {/* Intent overlay - status-based colors on top of base pins */}
-                <Source
-                    id="intent-overlay-source"
-                    type="geojson"
-                    data={overlayGeoJSON}
-                >
-                    <Layer
-                        id="intent-overlay"
-                        type="circle"
-                        paint={{
-                            "circle-color": ["get", "color"],
-                            "circle-radius": [
-                                "interpolate", ["linear"], ["zoom"],
-                                12, 3,
-                                14, 4,
-                                16, 6
-                            ],
-                            "circle-stroke-width": [
-                                "interpolate", ["linear"], ["zoom"],
-                                12, 1,
-                                16, 1.5
-                            ],
-                            "circle-stroke-color": "#fff",
-                        }}
+                {/* Area Vibe Bar - hidden when cards are open */}
+                {showVibeBar && (
+                    <AreaVibeBar
+                        stats={vibeStats}
+                        events={liveFeedEvents}
+                        loading={vibeLoading}
+                        eventsLoading={liveFeedLoading}
+                        expanded={vibeBarExpanded}
+                        onToggleExpand={handleToggleVibeBar}
+                        onEventClick={handleEventClick}
                     />
-                </Source>
-
-                {/* GeoJSON source for user's claimed properties (green overlay) */}
-                <Source
-                    id="my-claims-source"
-                    type="geojson"
-                    data={myClaimsData}
-                >
-                    <Layer
-                        id="my-claims"
-                        type="circle"
-                        paint={{
-                            "circle-color": "#22c55e",
-                            "circle-radius": [
-                                "interpolate", ["linear"], ["zoom"],
-                                8, 3,
-                                12, 6,
-                                16, 9
-                            ],
-                            "circle-stroke-width": [
-                                "interpolate", ["linear"], ["zoom"],
-                                8, 0.5,
-                                12, 2,
-                                16, 2.5
-                            ],
-                            "circle-stroke-color": "#fff",
-                        }}
-                    />
-                </Source>
-            </Map>
-
-            {/* Top-left controls */}
-            <div className="absolute top-4 left-4 flex flex-col gap-2">
-                <AuthControls />
-                <div className="bg-white/90 backdrop-blur-sm rounded-lg px-3 py-2 shadow-md text-sm">
-                    <span className="text-gray-700">
-                        {myClaimsData.features.length > 0
-                            ? `${myClaimsData.features.length} claimed`
-                            : showClusters ? "Clustered view" : "Vector tiles"}
-                    </span>
-                </div>
+                )}
             </div>
-
-            {/* Property card sheet */}
-            {selectedPropertyId && (
-                <PropertyCardSheet
-                    propertyId={selectedPropertyId}
-                    onClose={handleCloseSheet}
-                    onClaimSuccess={handleClaimSuccess}
-                />
-            )}
-
-            {/* Area Vibe Bar - hidden when cards are open */}
-            {showVibeBar && (
-                <AreaVibeBar
-                    stats={vibeStats}
-                    events={liveFeedEvents}
-                    loading={vibeLoading}
-                    eventsLoading={liveFeedLoading}
-                    expanded={vibeBarExpanded}
-                    onToggleExpand={handleToggleVibeBar}
-                    onEventClick={handleEventClick}
-                />
-            )}
-        </div>
+        </MapIntentProvider>
     );
 }
+

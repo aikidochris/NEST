@@ -19,7 +19,76 @@ export interface PropertyPublic {
     summary_text: string | null;
     /** Computed server-side: true if authenticated user owns this property */
     is_mine: boolean;
+
+    // Image fields (nullable, backend will provide)
+    /** Cover image URL for hero display */
+    cover_image_url?: string | null;
+    /** Whether additional images exist in album */
+    has_additional_images?: boolean;
+    /** Public images for Tier 2 gallery (fetched separately) */
+    public_images?: PropertyImage[];
 }
+
+// =============================================================================
+// PHOTO TYPES (matches property_images table)
+// =============================================================================
+
+export type ImageKind = "cover" | "album";
+export type ImageVisibility = "public" | "followers" | "chat_unlocked" | "private";
+
+export interface PropertyImage {
+    id: string;
+    property_id: string;
+    url: string;
+    kind: ImageKind;
+    album_key: string | null;  // "kitchen" | "living" | "garden" etc
+    visibility: ImageVisibility;
+    sort_order: number;
+    created_at: string;
+}
+
+// =============================================================================
+// CONVERSATION TYPES (matches conversations/messages tables)
+// =============================================================================
+
+export type ConversationRole = "owner" | "viewer";
+
+export interface Conversation {
+    id: string;
+    property_id: string;
+    owner_user_id: string;
+    created_by_user_id: string;
+    created_at: string;
+    updated_at: string;
+}
+
+export interface ConversationParticipant {
+    conversation_id: string;
+    user_id: string;
+    role: ConversationRole;
+    created_at: string;
+}
+
+export interface Message {
+    id: string;
+    conversation_id: string;
+    sender_user_id: string;
+    body: string;
+    created_at: string;
+}
+
+export interface ConversationAlbumUnlock {
+    id: string;
+    conversation_id: string;
+    property_id: string;
+    album_key: string;
+    unlocked_by_user_id: string;
+    created_at: string;
+}
+
+// =============================================================================
+// API TYPES
+// =============================================================================
 
 export interface BBox {
     minLon: number;
@@ -42,3 +111,4 @@ export interface ApiErrorResponse {
 }
 
 export type ApiResponse = PropertiesApiResponse | ApiErrorResponse;
+

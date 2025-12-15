@@ -180,3 +180,11 @@ Grants execute to anon/authenticated
 This has been ran in supabase
 
 20251214_012_live_feed_update.sql - this has been run in supabase
+
+20251215_001_property_images_conversations.sql - this has been applied
+20251215_003_messaging_fix.sql - this has been applied
+20251215_004_fix_conversation_rls.sql - this has been applied
+20251215_005_message_recursion_fix.sql - this has been applied
+20251215_006_API_fix.sql - this has been applied
+20251215_007_property_claims_read_policy.sql - this has been applied
+20251215_008_pin_fixes.sql - this has been applied
