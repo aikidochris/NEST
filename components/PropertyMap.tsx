@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import Map, { Source, Layer, ViewStateChangeEvent, MapRef } from "react-map-gl/maplibre";
 import type { MapLayerMouseEvent, GeoJSONSource } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
@@ -9,7 +9,8 @@ import { AuthControls } from "@/components/AuthControls";
 import { PropertyCardSheet } from "@/components/PropertyCardSheet";
 import { AreaVibeBar, type VibeStats, type LiveFeedEvent } from "@/components/AreaVibeBar";
 import { useAuth } from "@/app/AuthProvider";
-import { inspectLog, resolveStatus } from "@/lib/inspect";
+import { inspectLog, resolveStatus, type Status } from "@/lib/inspect";
+import { getPinColor } from "@/lib/statusStyles";
 
 // =============================================================================
 // DESIGN KNOBS - Configurable constants
@@ -29,6 +30,7 @@ const DEFAULT_VIEW = {
     zoom: 12,
 };
 const DEBOUNCE_MS = 300;
+const INTENT_OVERLAY_DEBOUNCE_MS = 400;
 
 // Empty GeoJSON for initial state
 const EMPTY_GEOJSON: GeoJSON.FeatureCollection = {
@@ -63,6 +65,18 @@ function bboxToGridKey(bbox: BBox): string {
     ].join(",");
 }
 
+/**
+ * Intent overlay data for a single property.
+ */
+interface IntentOverlayData {
+    property_id: string;
+    is_claimed: boolean | null;
+    soft_listing: boolean | null;
+    settled: boolean | null;
+    is_for_sale: boolean | null;
+    is_for_rent: boolean | null;
+}
+
 export default function PropertyMap() {
     const mapRef = useRef<MapRef>(null);
     const [viewState, setViewState] = useState(DEFAULT_VIEW);
@@ -82,13 +96,20 @@ export default function PropertyMap() {
     const clusterAbortRef = useRef<AbortController | null>(null);
     const vibeAbortRef = useRef<AbortController | null>(null);
     const liveFeedAbortRef = useRef<AbortController | null>(null);
+    const intentOverlayAbortRef = useRef<AbortController | null>(null);
     const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
+    const intentOverlayDebounceRef = useRef<NodeJS.Timeout | null>(null);
 
     // Cache for vibe stats by grid key
     const vibeCacheRef = useRef<globalThis.Map<string, VibeStats>>(new globalThis.Map());
 
     // Store current bbox for live feed fetch
     const currentBboxRef = useRef<BBox | null>(null);
+
+    // Intent overlay: visible property IDs and their intent flags
+    const [visiblePropertyIds, setVisiblePropertyIds] = useState<string[]>([]);
+    const intentOverlayRef = useRef<globalThis.Map<string, IntentOverlayData>>(new globalThis.Map());
+    const [intentOverlayVersion, setIntentOverlayVersion] = useState(0);
 
     // Fetch cluster data (GeoJSON for clustering at low zoom)
     const fetchClusterData = useCallback(async (bbox: BBox, zoom: number) => {
@@ -287,6 +308,87 @@ export default function PropertyMap() {
         }
     }, []);
 
+    // Fetch intent overlay for visible property IDs
+    const fetchIntentOverlay = useCallback(async (ids: string[]) => {
+        if (ids.length === 0) return;
+
+        if (intentOverlayAbortRef.current) {
+            intentOverlayAbortRef.current.abort();
+        }
+
+        const controller = new AbortController();
+        intentOverlayAbortRef.current = controller;
+
+        try {
+            const response = await fetch("/api/intent-overlay", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ ids }),
+                signal: controller.signal,
+            });
+
+            if (!response.ok) return;
+
+            const json = await response.json();
+            if (json.ok && json.data) {
+                // Update overlay map
+                const newOverlay = intentOverlayRef.current;
+                for (const item of json.data as IntentOverlayData[]) {
+                    newOverlay.set(item.property_id, item);
+                }
+                // Keep cache size reasonable (max 2000 entries)
+                if (newOverlay.size > 2000) {
+                    const keysToDelete = [...newOverlay.keys()].slice(0, newOverlay.size - 2000);
+                    for (const key of keysToDelete) {
+                        newOverlay.delete(key);
+                    }
+                }
+                // Trigger re-render
+                setIntentOverlayVersion((v) => v + 1);
+
+                // Inspection logging
+                inspectLog("INTENT_OVERLAY_FETCH", { count: ids.length });
+            }
+        } catch (err) {
+            if (err instanceof Error && err.name === "AbortError") return;
+            // Silently fail - overlay is optional enhancement
+        }
+    }, []);
+
+    // Capture visible property IDs from rendered features (non-clustered only)
+    const captureVisiblePropertyIds = useCallback(() => {
+        const map = mapRef.current?.getMap();
+        if (!map) return;
+
+        const ids = new Set<string>();
+
+        // Query rendered features from property layers (non-clustered)
+        const layers = ["property-points", "unclustered-point"];
+        for (const layerId of layers) {
+            try {
+                const features = map.queryRenderedFeatures(undefined, { layers: [layerId] });
+                for (const f of features) {
+                    const pid = f.properties?.property_id;
+                    if (typeof pid === "string" && pid.length > 0) {
+                        ids.add(pid);
+                    }
+                }
+            } catch {
+                // Layer might not exist yet
+            }
+        }
+
+        const idsArray = [...ids];
+
+        // Only update if set actually changed
+        setVisiblePropertyIds((prev) => {
+            if (prev.length === idsArray.length && prev.every((id, i) => id === idsArray[i])) {
+                return prev;
+            }
+            return idsArray;
+        });
+    }, []);
+
     // Initial fetch on map load + set up cursor handlers
     const handleLoad = useCallback(
         (evt: { target: maplibregl.Map }) => {
@@ -301,7 +403,7 @@ export default function PropertyMap() {
             }
 
             // Pointer cursor on interactive layers
-            const interactiveLayers = ["property-points", "my-claims", "clusters"];
+            const interactiveLayers = ["property-points", "my-claims", "clusters", "intent-overlay"];
             interactiveLayers.forEach((layer) => {
                 map.on("mouseenter", layer, () => {
                     map.getCanvas().style.cursor = "pointer";
@@ -310,8 +412,11 @@ export default function PropertyMap() {
                     map.getCanvas().style.cursor = "";
                 });
             });
+
+            // Capture visible IDs on map idle (after render complete)
+            map.on("idle", captureVisiblePropertyIds);
         },
-        [fetchMyClaims, fetchClusterData, fetchVibeStats]
+        [fetchMyClaims, fetchClusterData, fetchVibeStats, captureVisiblePropertyIds]
     );
 
     // Handle map click - cluster zoom or property select
@@ -357,10 +462,11 @@ export default function PropertyMap() {
 
             // Individual property click
             const myClaimFeature = features.find((f) => f.layer?.id === "my-claims");
+            const overlayFeature = features.find((f) => f.layer?.id === "intent-overlay");
             const baseFeature = features.find((f) => f.layer?.id === "property-points");
             const unclusteredFeature = features.find((f) => f.layer?.id === "unclustered-point");
 
-            const feature = myClaimFeature || baseFeature || unclusteredFeature;
+            const feature = myClaimFeature || overlayFeature || baseFeature || unclusteredFeature;
             if (!feature) return;
 
             const propertyId = feature.properties?.property_id;
@@ -369,10 +475,15 @@ export default function PropertyMap() {
                 const props = feature.properties ?? {};
                 const source_layer = feature.layer?.id;
 
-                // Determine is_claimed: my-claims layer is always claimed
+                // Check if we have overlay data for more accurate status
+                const overlay = intentOverlayRef.current.get(propertyId);
+
+                // Determine is_claimed: my-claims layer is always claimed, overlay takes priority
                 const raw_is_claimed = props.is_claimed;
                 let is_claimed: boolean | null;
-                if (source_layer === "my-claims") {
+                if (overlay) {
+                    is_claimed = overlay.is_claimed;
+                } else if (source_layer === "my-claims") {
                     // My-claims layer features are definitionally claimed by current user
                     is_claimed = true;
                 } else if (typeof raw_is_claimed === "boolean") {
@@ -382,7 +493,13 @@ export default function PropertyMap() {
                     is_claimed = null;
                 }
 
-                const intent_flags = {
+                // Use overlay data if available, otherwise fall back to feature properties
+                const intent_flags = overlay ? {
+                    soft_listing: overlay.soft_listing,
+                    settled: overlay.settled,
+                    is_for_sale: overlay.is_for_sale,
+                    is_for_rent: overlay.is_for_rent,
+                } : {
                     soft_listing: props.soft_listing ?? props.is_open_to_talking ?? null,
                     settled: props.settled ?? props.is_settled ?? null,
                     is_for_sale: props.is_for_sale ?? null,
@@ -396,13 +513,16 @@ export default function PropertyMap() {
                     is_claimed,
                     display_label: props.display_label ?? null,
                     source_layer,
+                    has_overlay: !!overlay,
                     intent_flags,
                     resolved_status: resolveStatus({
                         is_claimed,
-                        soft_listing: intent_flags.soft_listing === true,
-                        settled: intent_flags.settled === true,
-                        is_for_sale: intent_flags.is_for_sale === true,
-                        is_for_rent: intent_flags.is_for_rent === true,
+                        intent_flags: {
+                            soft_listing: intent_flags.soft_listing === true,
+                            settled: intent_flags.settled === true,
+                            is_for_sale: intent_flags.is_for_sale === true,
+                            is_for_rent: intent_flags.is_for_rent === true,
+                        },
                     }),
                 });
                 setSelectedPropertyId(propertyId);
@@ -434,11 +554,100 @@ export default function PropertyMap() {
             clusterAbortRef.current?.abort();
             vibeAbortRef.current?.abort();
             liveFeedAbortRef.current?.abort();
+            intentOverlayAbortRef.current?.abort();
             if (debounceTimerRef.current) {
                 clearTimeout(debounceTimerRef.current);
             }
+            if (intentOverlayDebounceRef.current) {
+                clearTimeout(intentOverlayDebounceRef.current);
+            }
         };
     }, []);
+
+    // Debounced effect to fetch intent overlay when visible IDs change
+    useEffect(() => {
+        if (visiblePropertyIds.length === 0) return;
+
+        // Filter out IDs we already have in cache
+        const uncachedIds = visiblePropertyIds.filter((id) => !intentOverlayRef.current.has(id));
+        if (uncachedIds.length === 0) return;
+
+        // Debounce the fetch
+        if (intentOverlayDebounceRef.current) {
+            clearTimeout(intentOverlayDebounceRef.current);
+        }
+
+        intentOverlayDebounceRef.current = setTimeout(() => {
+            fetchIntentOverlay(uncachedIds);
+        }, INTENT_OVERLAY_DEBOUNCE_MS);
+
+        return () => {
+            if (intentOverlayDebounceRef.current) {
+                clearTimeout(intentOverlayDebounceRef.current);
+            }
+        };
+    }, [visiblePropertyIds, fetchIntentOverlay]);
+
+    // Compute overlay GeoJSON with status-based colors
+    const overlayGeoJSON = useMemo((): GeoJSON.FeatureCollection => {
+        // Use intentOverlayVersion to trigger recalculation
+        void intentOverlayVersion;
+
+        const features: GeoJSON.Feature[] = [];
+        const map = mapRef.current?.getMap();
+        if (!map) return { type: "FeatureCollection", features };
+
+        // Get all non-clustered features from property layers
+        const layers = ["property-points", "unclustered-point"];
+        for (const layerId of layers) {
+            try {
+                const renderedFeatures = map.queryRenderedFeatures(undefined, { layers: [layerId] });
+                for (const f of renderedFeatures) {
+                    const pid = f.properties?.property_id;
+                    if (typeof pid !== "string" || pid.length === 0) continue;
+
+                    const overlay = intentOverlayRef.current.get(pid);
+                    if (!overlay) continue; // No overlay data yet
+
+                    const geometry = f.geometry as GeoJSON.Point;
+                    if (geometry.type !== "Point") continue;
+
+                    const status = resolveStatus({
+                        is_claimed: overlay.is_claimed,
+                        intent_flags: {
+                            soft_listing: overlay.soft_listing,
+                            settled: overlay.settled,
+                            is_for_sale: overlay.is_for_sale,
+                            is_for_rent: overlay.is_for_rent,
+                        },
+                    });
+
+                    features.push({
+                        type: "Feature",
+                        geometry,
+                        properties: {
+                            property_id: pid,
+                            color: getPinColor(status),
+                            status,
+                        },
+                    });
+                }
+            } catch {
+                // Layer might not exist
+            }
+        }
+
+        // Dedupe by property_id (keep first occurrence)
+        const seen = new Set<string>();
+        const dedupedFeatures = features.filter((f) => {
+            const pid = f.properties?.property_id;
+            if (seen.has(pid)) return false;
+            seen.add(pid);
+            return true;
+        });
+
+        return { type: "FeatureCollection", features: dedupedFeatures };
+    }, [intentOverlayVersion]);
 
     // Toggle vibe bar expand and fetch live feed
     const handleToggleVibeBar = useCallback(() => {
@@ -493,7 +702,7 @@ export default function PropertyMap() {
                 onMoveEnd={handleMoveEnd}
                 onLoad={handleLoad}
                 onClick={handleMapClick}
-                interactiveLayerIds={["property-points", "my-claims", "clusters", "unclustered-point"]}
+                interactiveLayerIds={["property-points", "my-claims", "clusters", "unclustered-point", "intent-overlay"]}
                 style={{ width: "100%", height: "100%" }}
                 mapStyle={MAP_STYLE}
             >
@@ -511,10 +720,11 @@ export default function PropertyMap() {
                         source-layer="properties"
                         minzoom={CLUSTER_MAX_ZOOM}
                         paint={{
+                            // Neutral colors for base layer - intent overlay adds color
                             "circle-color": [
                                 "case",
-                                ["get", "is_claimed"], "#8b5cf6",
-                                "#3b82f6"
+                                ["get", "is_claimed"], "#9CA3AF",  // Medium grey (owner, no intent)
+                                "#D1D5DB"                          // Light grey (unclaimed, calm)
                             ],
                             "circle-radius": [
                                 "interpolate", ["linear"], ["zoom"],
@@ -607,10 +817,11 @@ export default function PropertyMap() {
                             type="circle"
                             filter={["!", ["has", "point_count"]]}
                             paint={{
+                                // Neutral colors - intent overlay adds color
                                 "circle-color": [
                                     "case",
-                                    ["get", "is_claimed"], "#8b5cf6",
-                                    "#3b82f6"
+                                    ["get", "is_claimed"], "#9CA3AF",  // Medium grey
+                                    "#D1D5DB"                          // Light grey
                                 ],
                                 "circle-radius": 4,
                                 "circle-stroke-width": 1,
@@ -629,6 +840,33 @@ export default function PropertyMap() {
                         />
                     </Source>
                 )}
+
+                {/* Intent overlay - status-based colors on top of base pins */}
+                <Source
+                    id="intent-overlay-source"
+                    type="geojson"
+                    data={overlayGeoJSON}
+                >
+                    <Layer
+                        id="intent-overlay"
+                        type="circle"
+                        paint={{
+                            "circle-color": ["get", "color"],
+                            "circle-radius": [
+                                "interpolate", ["linear"], ["zoom"],
+                                12, 3,
+                                14, 4,
+                                16, 6
+                            ],
+                            "circle-stroke-width": [
+                                "interpolate", ["linear"], ["zoom"],
+                                12, 1,
+                                16, 1.5
+                            ],
+                            "circle-stroke-color": "#fff",
+                        }}
+                    />
+                </Source>
 
                 {/* GeoJSON source for user's claimed properties (green overlay) */}
                 <Source

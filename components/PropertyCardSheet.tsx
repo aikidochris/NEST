@@ -123,10 +123,12 @@ export function PropertyCardSheet({ propertyId, onClose, onClaimSuccess }: Prope
                 },
                 resolved_status: resolveStatus({
                     is_claimed: property.is_claimed,
-                    soft_listing: property.is_open_to_talking,
-                    settled: property.is_settled,
-                    is_for_sale: property.is_for_sale,
-                    is_for_rent: property.is_for_rent,
+                    intent_flags: {
+                        soft_listing: property.is_open_to_talking ?? null,
+                        settled: property.is_settled ?? null,
+                        is_for_sale: property.is_for_sale ?? null,
+                        is_for_rent: property.is_for_rent ?? null,
+                    },
                 }),
             });
         }
