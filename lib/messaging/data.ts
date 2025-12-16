@@ -118,11 +118,14 @@ export async function listConversations(): Promise<ConversationSummary[]> {
         const lastMsg = lastMessages?.[0];
 
         // Get property info (for title)
-        const { data: property } = await supabase
+        const { data: propertyRows } = await supabase
             .from("property_public_view")
             .select("display_label, is_open_to_talking, is_for_sale, is_for_rent, is_settled")
             .eq("property_id", conv.property_id)
-            .single();
+            .order("updated_at", { ascending: false })
+            .limit(1);
+
+        const property = propertyRows && propertyRows.length === 1 ? propertyRows[0] : null;
 
         // Determine intent status
         let intentStatus: Status | undefined;
@@ -260,6 +263,7 @@ export async function getOrCreateConversationByProperty(
             .select("*")
             .in("id", existingConvIds)
             .eq("property_id", propertyId)
+            .order("updated_at", { ascending: false })
             .limit(1);
 
         if (existingConv && existingConv.length > 0) {
@@ -280,12 +284,14 @@ export async function getOrCreateConversationByProperty(
     let resolvedOwnerUserId = ownerUserId;
     if (!resolvedOwnerUserId) {
         // Try to get it from the property
-        const { data: property } = await supabase
+        const { data: propertyRows } = await supabase
             .from("property_public_view")
             .select("claimed_by_user_id")
             .eq("property_id", propertyId)
-            .single();
+            .order("updated_at", { ascending: false })
+            .limit(1);
 
+        const property = propertyRows && propertyRows.length === 1 ? propertyRows[0] : null;
         if (!property?.claimed_by_user_id) {
             throw new Error("Cannot message: Property owner not found. Property may be unclaimed.");
         }
@@ -362,24 +368,28 @@ export async function getOrCreateConversationByProperty(
 export async function getConversation(
     conversationId: string
 ): Promise<ConversationSummary | null> {
-    const { data, error } = await supabase
+    const { data: convRows, error } = await supabase
         .from("conversations")
         .select("*")
         .eq("id", conversationId)
-        .single();
+        .order("updated_at", { ascending: false })
+        .limit(1);
 
-    if (error || !data) {
+    if (error || !convRows || convRows.length === 0) {
         return null;
     }
 
-    const conv = data as DbConversation;
+    const conv = convRows[0] as DbConversation;
 
     // Get property info
-    const { data: property } = await supabase
+    const { data: propertyRows } = await supabase
         .from("property_public_view")
         .select("display_label, is_open_to_talking, is_for_sale, is_for_rent, is_settled")
         .eq("property_id", conv.property_id)
-        .single();
+        .order("updated_at", { ascending: false })
+        .limit(1);
+
+    const property = propertyRows && propertyRows.length === 1 ? propertyRows[0] : null;
 
     let intentStatus: Status | undefined;
     if (property?.is_open_to_talking) intentStatus = "open_to_talking";
@@ -456,14 +466,15 @@ export async function isConversationOwner(conversationId: string): Promise<boole
     const userId = await getCurrentUserId();
     if (!userId) return false;
 
-    const { data } = await supabase
+    const { data: participantRows } = await supabase
         .from("conversation_participants")
         .select("role")
         .eq("conversation_id", conversationId)
         .eq("user_id", userId)
-        .single();
+        .limit(1);
 
-    return data?.role === "owner";
+    const participant = participantRows && participantRows.length === 1 ? participantRows[0] : null;
+    return participant?.role === "owner";
 }
 
 // =============================================================================
@@ -490,6 +501,7 @@ export async function findConversationByProperty(
         .select("*")
         .in("id", convIds)
         .eq("property_id", propertyId)
+        .order("updated_at", { ascending: false })
         .limit(1);
 
     if (!conv || conv.length === 0) return null;
@@ -505,4 +517,77 @@ export async function findConversationByProperty(
         last_message_at: c.updated_at,
         unread_count: 0,
     };
+}
+
+// =============================================================================
+// LIST CONVERSATIONS FOR PROPERTY (OWNER INBOX)
+// =============================================================================
+
+/**
+ * List all conversations for a specific property.
+ * Used by property owners to see their inbox.
+ */
+export async function listConversationsForProperty(
+    propertyId: string
+): Promise<ConversationSummary[]> {
+    const userId = await getCurrentUserId();
+    if (!userId) {
+        console.warn("[messaging] listConversationsForProperty: Not authenticated");
+        return [];
+    }
+
+    // Get all conversations for this property where user is the owner
+    const { data: conversations, error: convError } = await supabase
+        .from("conversations")
+        .select("*")
+        .eq("property_id", propertyId)
+        .eq("owner_user_id", userId)
+        .order("updated_at", { ascending: false });
+
+    if (convError) {
+        console.error("[messaging] listConversationsForProperty error:", convError);
+        return [];
+    }
+
+    if (!conversations || conversations.length === 0) {
+        return [];
+    }
+
+    const summaries: ConversationSummary[] = [];
+
+    for (const conv of conversations as DbConversation[]) {
+        // Get last message
+        const { data: lastMessages } = await supabase
+            .from("messages")
+            .select("body, created_at, sender_user_id")
+            .eq("conversation_id", conv.id)
+            .order("created_at", { ascending: false })
+            .limit(1);
+
+        const lastMsg = lastMessages?.[0];
+
+        // Get the other participant (the viewer who initiated)
+        const { data: participants } = await supabase
+            .from("conversation_participants")
+            .select("user_id")
+            .eq("conversation_id", conv.id)
+            .neq("user_id", userId)
+            .limit(1);
+
+        const otherUserId = participants?.[0]?.user_id;
+
+        summaries.push({
+            id: conv.id,
+            property_id: conv.property_id,
+            property_title: otherUserId ? `Conversation` : "Conversation",
+            intent_status: undefined,
+            last_message: lastMsg?.body ?
+                (lastMsg.body.length > 50 ? lastMsg.body.slice(0, 47) + "..." : lastMsg.body) :
+                undefined,
+            last_message_at: lastMsg?.created_at || conv.updated_at,
+            unread_count: 0, // TODO: implement unread tracking
+        });
+    }
+
+    return summaries;
 }

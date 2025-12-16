@@ -8,10 +8,11 @@ import type { BBox } from "@/types/property";
 import { AuthControls } from "@/components/AuthControls";
 import { PropertyCardSheet } from "@/components/PropertyCardSheet";
 import { AreaVibeBar, type VibeStats, type LiveFeedEvent } from "@/components/AreaVibeBar";
+import { MessageCentreOverlay } from "@/components/MessageCentreOverlay";
 import { useAuth } from "@/app/AuthProvider";
 import { inspectLog, resolveStatus, type Status } from "@/lib/inspect";
 import { getPinColor } from "@/lib/statusStyles";
-import { MapIntentProvider } from "@/contexts/MapIntentContext";
+import { MapIntentProvider, type FlyToOptions } from "@/contexts/MapIntentContext";
 
 // =============================================================================
 // DESIGN KNOBS - Configurable constants
@@ -122,8 +123,10 @@ export default function PropertyMap() {
     const [liveFeedEvents, setLiveFeedEvents] = useState<LiveFeedEvent[]>([]);
     const [liveFeedLoading, setLiveFeedLoading] = useState(false);
     const [vibeBarExpanded, setVibeBarExpanded] = useState(false);
+    const [showMessageCentre, setShowMessageCentre] = useState(false);
+    const [pendingConversationId, setPendingConversationId] = useState<string | null>(null);
 
-    const { accessToken } = useAuth();
+    const { accessToken, user } = useAuth();
 
     // Abort controllers
     const claimsAbortRef = useRef<AbortController | null>(null);
@@ -611,6 +614,51 @@ export default function PropertyMap() {
         }
     }, [fetchMyClaims, selectedPropertyId, refreshIntentForProperty]);
 
+    // Fly to a property's coordinates
+    const handleFlyToProperty = useCallback((options: FlyToOptions) => {
+        const map = mapRef.current?.getMap();
+        if (!map) return;
+
+        const zoom = options.zoom ?? 17; // Default to street-level zoom
+
+        // Fly to the property
+        map.flyTo({
+            center: [options.lon, options.lat],
+            zoom,
+            essential: true,
+            duration: 1500,
+        });
+
+        // Inspection log
+        inspectLog("NEIGHBOUR_FLYTO", {
+            property_id: options.propertyId,
+            lat: options.lat,
+            lon: options.lon,
+        });
+    }, []);
+
+    // Message Centre: navigate to property (just open card)
+    const handleMessageCentreNavigateToProperty = useCallback((propertyId: string, lat?: number, lon?: number) => {
+        // Fly to property if coordinates available
+        if (lat !== undefined && lon !== undefined) {
+            handleFlyToProperty({ propertyId, lat, lon });
+        }
+        // Open property card (no specific conversation)
+        setPendingConversationId(null);
+        setSelectedPropertyId(propertyId);
+    }, [handleFlyToProperty]);
+
+    // Message Centre: navigate to specific conversation
+    const handleMessageCentreNavigateToConversation = useCallback((propertyId: string, conversationId: string, lat?: number, lon?: number) => {
+        // Fly to property if coordinates available
+        if (lat !== undefined && lon !== undefined) {
+            handleFlyToProperty({ propertyId, lat, lon });
+        }
+        // Set the pending conversation so PropertyCardSheet can open it
+        setPendingConversationId(conversationId);
+        setSelectedPropertyId(propertyId);
+    }, [handleFlyToProperty]);
+
     // Cleanup on unmount
     useEffect(() => {
         return () => {
@@ -766,7 +814,7 @@ export default function PropertyMap() {
     }, [selectedPropertyId]);
 
     return (
-        <MapIntentProvider onRefresh={refreshIntentForProperty}>
+        <MapIntentProvider onRefresh={refreshIntentForProperty} onFlyTo={handleFlyToProperty}>
             <div className="relative w-full h-screen">
                 <Map
                     ref={mapRef}
@@ -940,6 +988,19 @@ export default function PropertyMap() {
                 {/* Top-left controls */}
                 <div className="absolute top-4 left-4 flex flex-col gap-2">
                     <AuthControls />
+                    {/* Messages button - only for authenticated users */}
+                    {user && (
+                        <button
+                            onClick={() => setShowMessageCentre(true)}
+                            className="bg-white/90 backdrop-blur-sm rounded-lg p-2.5 shadow-md hover:bg-white transition-colors flex items-center gap-2"
+                            aria-label="Messages"
+                        >
+                            <svg className="w-5 h-5 text-teal-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                            </svg>
+                            <span className="text-sm font-medium text-gray-700">Messages</span>
+                        </button>
+                    )}
                     <div className="bg-white/90 backdrop-blur-sm rounded-lg px-3 py-2 shadow-md text-sm">
                         <span className="text-gray-700">
                             {myClaimsData.features.length > 0
@@ -955,6 +1016,14 @@ export default function PropertyMap() {
                         propertyId={selectedPropertyId}
                         onClose={handleCloseSheet}
                         onClaimSuccess={handleClaimSuccess}
+                        onSelectNeighbour={(neighbourId, lat, lon) => {
+                            // Fly to neighbour's property
+                            if (lat !== undefined && lon !== undefined) {
+                                handleFlyToProperty({ propertyId: neighbourId, lat, lon });
+                            }
+                            // Navigate to neighbour's property card
+                            setSelectedPropertyId(neighbourId);
+                        }}
                     />
                 )}
 
@@ -968,6 +1037,15 @@ export default function PropertyMap() {
                         expanded={vibeBarExpanded}
                         onToggleExpand={handleToggleVibeBar}
                         onEventClick={handleEventClick}
+                    />
+                )}
+
+                {/* Message Centre Overlay */}
+                {showMessageCentre && (
+                    <MessageCentreOverlay
+                        onClose={() => setShowMessageCentre(false)}
+                        onNavigateToProperty={handleMessageCentreNavigateToProperty}
+                        onNavigateToConversation={handleMessageCentreNavigateToConversation}
                     />
                 )}
             </div>

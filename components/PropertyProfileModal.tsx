@@ -5,8 +5,12 @@ import type { PropertyPublic, PropertyImage as PropertyImageType } from "@/types
 import { PropertyImage } from "./PropertyImage";
 import { PropertyImageLightbox } from "./PropertyImageLightbox";
 import { OwnerToolsPanel } from "./OwnerToolsPanel";
+import { WaitingNotesPanel } from "./WaitingNotesPanel";
+import { PropertyMessagePanel } from "./PropertyMessagePanel";
 import { getChipStyle, getPublicLabel, getPinColor } from "@/lib/statusStyles";
 import { type Status } from "@/lib/status";
+import { isInspectOn } from "@/lib/inspect";
+import { listConversationsForProperty } from "@/lib/messaging";
 
 // =============================================================================
 // PROPERTY PROFILE MODAL (Tier 2 - S06)
@@ -32,6 +36,8 @@ interface PropertyProfileModalProps {
     onCoverUpload?: (file: File) => void;
     /** Album keys that have been unlocked (via conversation) */
     unlockedAlbums?: string[];
+    /** Callback when owner replies to a waiting note */
+    onNoteReply?: (conversationId: string) => void;
 }
 
 // Mock image data for development (will be fetched from API later)
@@ -96,9 +102,12 @@ export function PropertyProfileModal({
     onStoryUpdate,
     onCoverUpload,
     unlockedAlbums = [],
+    onNoteReply,
 }: PropertyProfileModalProps) {
     const [images, setImages] = useState<PropertyImageType[]>([]);
     const [lightboxImage, setLightboxImage] = useState<{ src: string; alt: string } | null>(null);
+    const [showOwnerInbox, setShowOwnerInbox] = useState(false);
+    const [hasConversations, setHasConversations] = useState(false);
 
     // Load images (mocked for now)
     useEffect(() => {
@@ -115,6 +124,29 @@ export function PropertyProfileModal({
         document.addEventListener("keydown", handleKeyDown);
         return () => document.removeEventListener("keydown", handleKeyDown);
     }, [onClose]);
+
+    // Check for existing conversations when owner views their property
+    useEffect(() => {
+        if (!property.is_mine) return;
+
+        let cancelled = false;
+
+        async function checkConversations() {
+            try {
+                const convs = await listConversationsForProperty(property.property_id);
+                if (!cancelled && convs.length > 0) {
+                    setHasConversations(true);
+                    setShowOwnerInbox(true); // Auto-open inbox if there are messages
+                }
+            } catch (err) {
+                console.error("[PropertyProfileModal] Failed to check conversations:", err);
+            }
+        }
+
+        checkConversations();
+
+        return () => { cancelled = true; };
+    }, [property.property_id, property.is_mine]);
 
     // Build display title
     const title = property.display_label ||
@@ -152,6 +184,16 @@ export function PropertyProfileModal({
             return { label: "Claim this home", onClick: onClaim || (() => { }) };
         }
 
+        // Owner: suppress message CTA (owner tools shown instead)
+        if (property.is_mine) {
+            if (isInspectOn()) {
+                console.log("[NEST_INSPECT] OWNER_CTA_SUPPRESSED", {
+                    property_id: property.property_id,
+                });
+            }
+            return null; // Owner sees tools panel, not messaging CTA
+        }
+
         // Claimed + Open to Talking / For Sale / For Rent: Message owner
         if (property.is_open_to_talking || property.is_for_sale || property.is_for_rent) {
             return { label: "Message owner", onClick: onMessage || (() => { }) };
@@ -167,6 +209,11 @@ export function PropertyProfileModal({
     };
 
     const getSecondaryAction = (): { label: string; onClick: () => void } | null => {
+        // Unclaimed + authenticated: Leave a friendly note
+        if (!property.is_claimed && isAuthenticated) {
+            return { label: "Leave a friendly note", onClick: onMessage || (() => { }) };
+        }
+
         if (!property.is_claimed) return null;
 
         // If primary is Message, secondary is Follow
@@ -347,6 +394,37 @@ export function PropertyProfileModal({
                                 onStoryUpdate={onStoryUpdate}
                                 onCoverUpload={onCoverUpload}
                             />
+                        )}
+
+                        {/* Waiting notes panel (if owner) */}
+                        <WaitingNotesPanel
+                            propertyId={property.property_id}
+                            isOwner={property.is_mine === true}
+                            onReply={onNoteReply}
+                        />
+
+                        {/* Owner inbox toggle and panel */}
+                        {property.is_mine && (
+                            <div className="px-4 pb-4">
+                                {!showOwnerInbox ? (
+                                    <button
+                                        onClick={() => setShowOwnerInbox(true)}
+                                        className="w-full py-3 px-4 bg-teal-50 hover:bg-teal-100 text-teal-700 text-sm font-medium rounded-lg transition-colors flex items-center justify-center gap-2"
+                                    >
+                                        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                                        </svg>
+                                        {hasConversations ? "View messages" : "Messages"}
+                                    </button>
+                                ) : (
+                                    <div className="border border-gray-200 rounded-xl overflow-hidden" style={{ height: "400px" }}>
+                                        <PropertyMessagePanel
+                                            property={property}
+                                            onClose={() => setShowOwnerInbox(false)}
+                                        />
+                                    </div>
+                                )}
+                            </div>
                         )}
 
                         {/* Story section */}

@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { useRouter } from "next/navigation";
 import { useClaim } from "@/hooks/useClaim";
 import type { PropertyPublic } from "@/types/property";
 import { inspectLog, resolveStatus } from "@/lib/inspect";
@@ -24,6 +23,8 @@ interface PropertyCardSheetProps {
     onClose: () => void;
     /** Callback after successful claim */
     onClaimSuccess: () => void;
+    /** Callback when navigating to a neighbour property (with optional coordinates for fly-to) */
+    onSelectNeighbour?: (propertyId: string, lat?: number, lon?: number) => void;
     /** Whether to use mobile layout */
     isMobile?: boolean;
 }
@@ -36,9 +37,9 @@ export function PropertyCardSheet({
     propertyId,
     onClose,
     onClaimSuccess,
+    onSelectNeighbour,
     isMobile = false,
 }: PropertyCardSheetProps) {
-    const router = useRouter();
     const { claim, claiming, error: claimError, isAuthenticated } = useClaim();
     const { refreshIntentOverlay } = useMapIntent();
     const [property, setProperty] = useState<PropertyPublic | null>(null);
@@ -157,7 +158,7 @@ export function PropertyCardSheet({
         }
     }, [claim, propertyId, property, onClaimSuccess, refreshIntentOverlay]);
 
-    // Handle message action - navigate to messages page
+    // Handle message action - opens Tier 2 modal where messaging is embedded
     const handleMessage = useCallback(() => {
         if (!property) return;
 
@@ -165,27 +166,9 @@ export function PropertyCardSheet({
             property_id: property.property_id,
         });
 
-        // Determine intent status for messaging context
-        let intentStatus = "";
-        if (property.is_open_to_talking) intentStatus = "open_to_talking";
-        else if (property.is_for_sale) intentStatus = "for_sale";
-        else if (property.is_for_rent) intentStatus = "for_rent";
-        else if (property.is_settled) intentStatus = "settled";
-
-        // Build title
-        const title = property.display_label ||
-            [property.house_number, property.street, property.postcode].filter(Boolean).join(", ") ||
-            "Property";
-
-        // Navigate to messages with property context
-        const params = new URLSearchParams({
-            property_id: property.property_id,
-            title: title,
-            ...(intentStatus && { status: intentStatus }),
-        });
-
-        router.push(`/messages?${params.toString()}`);
-    }, [property, router]);
+        // Open Tier 2 modal which has embedded messaging
+        setShowModal(true);
+    }, [property]);
 
     // Handle follow action (placeholder)
     const handleFollow = useCallback(() => {

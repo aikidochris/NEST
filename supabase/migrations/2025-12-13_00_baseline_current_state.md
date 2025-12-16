@@ -188,3 +188,9 @@ This has been ran in supabase
 20251215_006_API_fix.sql - this has been applied
 20251215_007_property_claims_read_policy.sql - this has been applied
 20251215_008_pin_fixes.sql - this has been applied
+20251215_009_messaging_start.sql - this has been applied
+20251215_010_messages_fix.sql - this has been applied
+20251215_011_another_message_fix.sql - this has been applied
+20251216_001_spam_limit.sql - this has been applied
+20251216_002_spam_limit_final.sql - this has been applied
+20251216_003_spam_limit_finish.sql - this has been applied
