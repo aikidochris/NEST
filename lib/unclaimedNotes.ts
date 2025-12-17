@@ -47,7 +47,9 @@ export async function listWaitingNotesForMyProperty(
         .order("created_at", { ascending: true });
 
     if (error) {
-        console.error("[unclaimedNotes] Failed to fetch notes:", error.message);
+        if (isInspectOn()) {
+            console.error("[unclaimedNotes] Failed to fetch notes:", error);
+        }
         return [];
     }
 
@@ -82,7 +84,9 @@ export async function canLeaveUnclaimedNote(
         .eq("property_id", propertyId);
 
     if (error) {
-        console.error("[unclaimedNotes] Failed to check note count:", error.message);
+        if (isInspectOn()) {
+            console.error("[unclaimedNotes] Failed to check note count:", error);
+        }
         return false;
     }
 
@@ -165,7 +169,9 @@ export async function getNearbyOpenNeighbours(
         .limit(100); // Get a reasonable set to filter by distance
 
     if (error) {
-        console.error("[unclaimedNotes] Failed to get neighbours:", error.message);
+        if (isInspectOn()) {
+            console.error("[unclaimedNotes] Failed to get neighbours:", error);
+        }
         return [];
     }
 

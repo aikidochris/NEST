@@ -1,4 +1,5 @@
 import { SupabaseClient } from "@supabase/supabase-js";
+import { isInspectOn } from "@/lib/inspect";
 
 // =============================================================================
 // OWNERSHIP HELPERS
@@ -24,7 +25,9 @@ export async function getMyClaimedPropertyIds(
         .eq("status", "claimed");
 
     if (error) {
-        console.error("[ownership] Failed to fetch claims:", error.message);
+        if (isInspectOn()) {
+            console.error("[ownership] Failed to fetch claims:", error);
+        }
         return new Set();
     }
 
@@ -59,7 +62,9 @@ export async function isPropertyMine(
         .maybeSingle();
 
     if (error) {
-        console.error("[ownership] Failed to check claim:", error.message);
+        if (isInspectOn()) {
+            console.error("[ownership] Failed to check claim:", error);
+        }
         return false;
     }
 

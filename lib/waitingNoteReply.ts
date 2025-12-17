@@ -42,7 +42,10 @@ export async function replyToWaitingNote(args: ReplyArgs): Promise<{ conversatio
         .maybeSingle();
 
     if (claimError) {
-        throw new Error(`Failed to verify ownership: ${claimError.message}`);
+        if (isInspectOn()) {
+            console.error("[waitingNoteReply] Failed to verify ownership:", claimError);
+        }
+        throw new Error("Something went wrong. Please try again.");
     }
 
     if (!claim) {
@@ -61,7 +64,10 @@ export async function replyToWaitingNote(args: ReplyArgs): Promise<{ conversatio
         .single();
 
     if (convError) {
-        throw new Error(`Failed to create conversation: ${convError.message}`);
+        if (isInspectOn()) {
+            console.error("[waitingNoteReply] Failed to create conversation:", convError);
+        }
+        throw new Error("Couldn't start conversation. Please try again.");
     }
 
     const conversationId = conversation.id;
@@ -77,7 +83,10 @@ export async function replyToWaitingNote(args: ReplyArgs): Promise<{ conversatio
         .insert(participants);
 
     if (partError) {
-        throw new Error(`Failed to add participants: ${partError.message}`);
+        if (isInspectOn()) {
+            console.error("[waitingNoteReply] Failed to add participants:", partError);
+        }
+        throw new Error("Something went wrong. Please try again.");
     }
 
     // Insert first message with quoted note
@@ -92,7 +101,10 @@ export async function replyToWaitingNote(args: ReplyArgs): Promise<{ conversatio
         });
 
     if (msgError) {
-        throw new Error(`Failed to create message: ${msgError.message}`);
+        if (isInspectOn()) {
+            console.error("[waitingNoteReply] Failed to create message:", msgError);
+        }
+        throw new Error("Message couldn't be sent. Please try again.");
     }
 
     // Delete the waiting note
@@ -102,8 +114,10 @@ export async function replyToWaitingNote(args: ReplyArgs): Promise<{ conversatio
         .eq("id", noteId);
 
     if (delError) {
-        // Non-fatal - log and continue
-        console.error("[waitingNoteReply] Failed to delete note:", delError.message);
+        // Non-fatal - log only in inspect mode and continue
+        if (isInspectOn()) {
+            console.error("[waitingNoteReply] Failed to delete note:", delError);
+        }
     }
 
     // Debug log

@@ -7,6 +7,7 @@ import { PropertyImageLightbox } from "./PropertyImageLightbox";
 import { OwnerToolsPanel } from "./OwnerToolsPanel";
 import { WaitingNotesPanel } from "./WaitingNotesPanel";
 import { PropertyMessagePanel } from "./PropertyMessagePanel";
+import { OwnerInboxPreview } from "./OwnerInboxPreview";
 import { getChipStyle, getPublicLabel, getPinColor } from "@/lib/statusStyles";
 import { type Status } from "@/lib/status";
 import { isInspectOn } from "@/lib/inspect";
@@ -38,6 +39,12 @@ interface PropertyProfileModalProps {
     unlockedAlbums?: string[];
     /** Callback when owner replies to a waiting note */
     onNoteReply?: (conversationId: string) => void;
+    /** Initial open mode: "card" or "messages" to auto-open messaging */
+    initialOpenMode?: "card" | "messages";
+    /** Initial conversation ID to open directly */
+    initialConversationId?: string | null;
+    /** Callback when navigating to a neighbour property */
+    onSelectNeighbour?: (propertyId: string, lat?: number, lon?: number) => void;
 }
 
 // Mock image data for development (will be fetched from API later)
@@ -103,16 +110,52 @@ export function PropertyProfileModal({
     onCoverUpload,
     unlockedAlbums = [],
     onNoteReply,
+    initialOpenMode = "card",
+    initialConversationId = null,
+    onSelectNeighbour,
 }: PropertyProfileModalProps) {
     const [images, setImages] = useState<PropertyImageType[]>([]);
     const [lightboxImage, setLightboxImage] = useState<{ src: string; alt: string } | null>(null);
-    const [showOwnerInbox, setShowOwnerInbox] = useState(false);
+    // Show messaging panel if initialOpenMode is 'messages' (for non-owners)
+    const [showMessagePanel, setShowMessagePanel] = useState(initialOpenMode === "messages" && !property.is_mine);
+    // Owner inbox: only show full panel if navigating directly to a conversation, otherwise show summary
+    const [showOwnerInbox, setShowOwnerInbox] = useState(
+        initialOpenMode === "messages" && property.is_mine && !!initialConversationId
+    );
     const [hasConversations, setHasConversations] = useState(false);
+    // Selected conversation for owner's inbox
+    const [selectedOwnerConversationId, setSelectedOwnerConversationId] = useState<string | null>(
+        initialConversationId ?? null
+    );
+    // Message panel mode for owner: 'thread' if opening specific conversation, 'list' if opening from View All
+    const [ownerPanelMode, setOwnerPanelMode] = useState<"list" | "thread">(
+        initialConversationId ? "thread" : "list"
+    );
+    // Track how owner entered the full panel (for "Back" button behavior)
+    const [ownerEntryPoint, setOwnerEntryPoint] = useState<"row" | "viewall">(
+        initialConversationId ? "row" : "viewall"
+    );
 
     // Load images (mocked for now)
     useEffect(() => {
         setImages(getMockImages(property));
     }, [property]);
+
+    // Log OPEN_PROPERTY_APPLIED on mount (confirms UI has opened)
+    useEffect(() => {
+        if (isInspectOn()) {
+            console.log("[NEST_INSPECT] OPEN_PROPERTY_APPLIED", {
+                property_id: property.property_id,
+                is_owner: property.is_mine,
+                initialOpenMode,
+                initialConversationId,
+                showOwnerInbox,
+                showMessagePanel,
+            });
+        }
+        // Only log on mount
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
 
     // Close on Escape
     useEffect(() => {
@@ -125,7 +168,7 @@ export function PropertyProfileModal({
         return () => document.removeEventListener("keydown", handleKeyDown);
     }, [onClose]);
 
-    // Check for existing conversations when owner views their property
+    // Check for existing conversations when owner views their property (for badge/count only)
     useEffect(() => {
         if (!property.is_mine) return;
 
@@ -136,10 +179,12 @@ export function PropertyProfileModal({
                 const convs = await listConversationsForProperty(property.property_id);
                 if (!cancelled && convs.length > 0) {
                     setHasConversations(true);
-                    setShowOwnerInbox(true); // Auto-open inbox if there are messages
+                    // DO NOT auto-open inbox - only set flag for display purposes
                 }
             } catch (err) {
-                console.error("[PropertyProfileModal] Failed to check conversations:", err);
+                if (isInspectOn()) {
+                    console.error("[PropertyProfileModal] Failed to check conversations:", err);
+                }
             }
         }
 
@@ -174,6 +219,41 @@ export function PropertyProfileModal({
         return statuses;
     };
 
+    // Handle "Message owner" click - opens the messaging panel within this modal
+    const handleMessageOwnerClick = () => {
+        if (isInspectOn()) {
+            console.log("[NEST_INSPECT] MESSAGE_OWNER_CLICK", {
+                property_id: property.property_id,
+                is_owner: property.is_mine,
+                is_claimed: property.is_claimed,
+                is_open_to_talking: property.is_open_to_talking,
+            });
+        }
+
+        // Open the message panel for viewers
+        setShowMessagePanel(true);
+
+        if (isInspectOn()) {
+            console.log("[NEST_INSPECT] MESSAGE_PANEL_OPEN", {
+                property_id: property.property_id,
+                conversation_id: null,
+                mode: "thread",
+            });
+        }
+    };
+
+    // Handle "Leave a friendly note" click for unclaimed properties
+    const handleLeaveNoteClick = () => {
+        if (isInspectOn()) {
+            console.log("[NEST_INSPECT] LEAVE_NOTE_CLICK", {
+                property_id: property.property_id,
+            });
+        }
+
+        // Open the message panel for unclaimed note
+        setShowMessagePanel(true);
+    };
+
     // Determine primary/secondary actions based on state
     const getPrimaryAction = (): { label: string; onClick: () => void } | null => {
         // Unclaimed: Claim this home
@@ -196,7 +276,7 @@ export function PropertyProfileModal({
 
         // Claimed + Open to Talking / For Sale / For Rent: Message owner
         if (property.is_open_to_talking || property.is_for_sale || property.is_for_rent) {
-            return { label: "Message owner", onClick: onMessage || (() => { }) };
+            return { label: "Message owner", onClick: handleMessageOwnerClick };
         }
 
         // Claimed + Settled: Follow
@@ -211,7 +291,7 @@ export function PropertyProfileModal({
     const getSecondaryAction = (): { label: string; onClick: () => void } | null => {
         // Unclaimed + authenticated: Leave a friendly note
         if (!property.is_claimed && isAuthenticated) {
-            return { label: "Leave a friendly note", onClick: onMessage || (() => { }) };
+            return { label: "Leave a friendly note", onClick: handleLeaveNoteClick };
         }
 
         if (!property.is_claimed) return null;
@@ -223,7 +303,7 @@ export function PropertyProfileModal({
 
         // If primary is Follow, secondary is Message (if allowed)
         if (property.is_settled && property.is_open_to_talking) {
-            return { label: "Message", onClick: onMessage || (() => { }) };
+            return { label: "Message", onClick: handleMessageOwnerClick };
         }
 
         return null;
@@ -403,27 +483,59 @@ export function PropertyProfileModal({
                             onReply={onNoteReply}
                         />
 
-                        {/* Owner inbox toggle and panel */}
+                        {/* Owner inbox: preview when collapsed, full panel when expanded */}
                         {property.is_mine && (
-                            <div className="px-4 pb-4">
-                                {!showOwnerInbox ? (
-                                    <button
-                                        onClick={() => setShowOwnerInbox(true)}
-                                        className="w-full py-3 px-4 bg-teal-50 hover:bg-teal-100 text-teal-700 text-sm font-medium rounded-lg transition-colors flex items-center justify-center gap-2"
-                                    >
-                                        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-                                        </svg>
-                                        {hasConversations ? "View messages" : "Messages"}
-                                    </button>
-                                ) : (
-                                    <div className="border border-gray-200 rounded-xl overflow-hidden" style={{ height: "400px" }}>
-                                        <PropertyMessagePanel
-                                            property={property}
-                                            onClose={() => setShowOwnerInbox(false)}
-                                        />
+                            <>
+                                {showOwnerInbox ? (
+                                    <div className="px-4 pb-4">
+                                        <div className="border border-gray-200 rounded-xl overflow-hidden" style={{ height: "400px" }}>
+                                            <PropertyMessagePanel
+                                                property={property}
+                                                onClose={() => {
+                                                    // Always return to summary view when closing
+                                                    setShowOwnerInbox(false);
+                                                    setSelectedOwnerConversationId(null);
+                                                    setOwnerPanelMode("list");
+                                                    setOwnerEntryPoint("viewall");
+                                                }}
+                                                conversationId={selectedOwnerConversationId}
+                                                onSelectNeighbour={onSelectNeighbour}
+                                                mode={ownerPanelMode}
+                                            />
+                                        </div>
                                     </div>
+                                ) : (
+                                    <OwnerInboxPreview
+                                        propertyId={property.property_id}
+                                        maxItems={5}
+                                        onSelectConversation={(conversationId) => {
+                                            setSelectedOwnerConversationId(conversationId);
+                                            setOwnerPanelMode("thread");
+                                            setOwnerEntryPoint("row");
+                                            setShowOwnerInbox(true);
+                                        }}
+                                        onViewAll={() => {
+                                            setSelectedOwnerConversationId(null);
+                                            setOwnerPanelMode("list");
+                                            setOwnerEntryPoint("viewall");
+                                            setShowOwnerInbox(true);
+                                        }}
+                                    />
                                 )}
+                            </>
+                        )}
+
+                        {/* Viewer message panel (non-owner, opened via openProperty) */}
+                        {!property.is_mine && showMessagePanel && (
+                            <div className="px-4 pb-4">
+                                <div className="border border-gray-200 rounded-xl overflow-hidden" style={{ height: "400px" }}>
+                                    <PropertyMessagePanel
+                                        property={property}
+                                        onClose={() => setShowMessagePanel(false)}
+                                        conversationId={initialConversationId}
+                                        onSelectNeighbour={onSelectNeighbour}
+                                    />
+                                </div>
                             </div>
                         )}
 

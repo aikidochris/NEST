@@ -1,4 +1,5 @@
 import { SupabaseClient } from "@supabase/supabase-js";
+import { isInspectOn } from "@/lib/inspect";
 
 // =============================================================================
 // INTENT FLAGS HELPERS
@@ -30,7 +31,9 @@ export async function getIntentFlagsByPropertyIds(
         .in("property_id", propertyIds);
 
     if (error) {
-        console.error("[intent] Failed to fetch intent flags:", error.message);
+        if (isInspectOn()) {
+            console.error("[intent] Failed to fetch intent flags:", error);
+        }
         return {};
     }
 
@@ -63,7 +66,9 @@ export async function getIntentFlagsForProperty(
         .maybeSingle();
 
     if (error) {
-        console.error("[intent] Failed to fetch intent flags:", error.message);
+        if (isInspectOn()) {
+            console.error("[intent] Failed to fetch intent flags:", error);
+        }
         return null;
     }
 
@@ -114,7 +119,9 @@ export async function persistOwnerStatus(
     // Get current user
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) {
-        console.error("[intent] Cannot persist status: no authenticated user");
+        if (isInspectOn()) {
+            console.error("[intent] Cannot persist status: no authenticated user");
+        }
         return false;
     }
 
@@ -135,19 +142,23 @@ export async function persistOwnerStatus(
         );
 
     if (upsertError) {
-        console.error("[intent] Failed to persist status:", upsertError.message);
+        if (isInspectOn()) {
+            console.error("[intent] Failed to persist status:", upsertError);
+        }
         return false;
     }
 
-    // Read back and log for verification
-    const { data } = await supabase
-        .from("intent_flags")
-        .select("soft_listing, is_for_sale, is_for_rent, settled, updated_at")
-        .eq("property_id", propertyId)
-        .eq("owner_id", user.id)
-        .maybeSingle();
+    // Read back and log for verification (only in inspect mode)
+    if (isInspectOn()) {
+        const { data } = await supabase
+            .from("intent_flags")
+            .select("soft_listing, is_for_sale, is_for_rent, settled, updated_at")
+            .eq("property_id", propertyId)
+            .eq("owner_id", user.id)
+            .maybeSingle();
 
-    console.log("[NEST_INSPECT] INTENT_FLAGS_AFTER_WRITE", { propertyId, data });
+        console.log("[NEST_INSPECT] INTENT_FLAGS_AFTER_WRITE", { propertyId, data });
+    }
 
     return true;
 }

@@ -49,6 +49,8 @@ interface PropertyMessagePanelProps {
     onSelectNeighbour?: (propertyId: string, lat?: number, lon?: number) => void;
     /** Pre-selected conversation ID (e.g., from note reply) */
     conversationId?: string | null;
+    /** Display mode: 'list' shows all conversations, 'thread' shows a specific conversation */
+    mode?: "list" | "thread";
 }
 
 export function PropertyMessagePanel({
@@ -57,6 +59,7 @@ export function PropertyMessagePanel({
     onClose,
     onSelectNeighbour,
     conversationId: providedConversationId,
+    mode: initialMode = "thread",
 }: PropertyMessagePanelProps) {
     const [conversationId, setConversationId] = useState<string | null>(null);
     const [messages, setMessages] = useState<Message[]>([]);
@@ -72,8 +75,11 @@ export function PropertyMessagePanel({
     const [lightboxAlbum, setLightboxAlbum] = useState<string | null>(null);
     const [lightboxImages, setLightboxImages] = useState<{ url: string }[]>([]);
     const [ownerConversations, setOwnerConversations] = useState<ConversationPreview[]>([]);
-    const [selectedOwnerConv, setSelectedOwnerConv] = useState<string | null>(null);
+    const [selectedOwnerConv, setSelectedOwnerConv] = useState<string | null>(
+        initialMode === "thread" && providedConversationId ? providedConversationId : null
+    );
     const [resolvedUserId, setResolvedUserId] = useState<string | undefined>(currentUserId);
+    const [panelMode, setPanelMode] = useState<"list" | "thread">(initialMode);
 
     // Fetch current user ID if not provided as prop
     useEffect(() => {

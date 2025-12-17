@@ -29,7 +29,10 @@ export async function getOrCreateConversationForProperty(
         .maybeSingle();
 
     if (claimError) {
-        throw new Error(`Failed to get property owner: ${claimError.message}`);
+        if (isInspectOn()) {
+            console.error("[messaging] Failed to get property owner:", claimError);
+        }
+        throw new Error("Something went wrong. Please try again.");
     }
 
     if (!claim) {
@@ -55,7 +58,10 @@ export async function getOrCreateConversationForProperty(
         .limit(1);
 
     if (convError) {
-        throw new Error(`Failed to check existing conversation: ${convError.message}`);
+        if (isInspectOn()) {
+            console.error("[messaging] Failed to check existing conversation:", convError);
+        }
+        throw new Error("Something went wrong. Please try again.");
     }
 
     const existingConv = existingConvRows && existingConvRows.length > 0 ? existingConvRows[0] : null;
@@ -85,7 +91,10 @@ export async function getOrCreateConversationForProperty(
         .single();
 
     if (createError) {
-        throw new Error(`Failed to create conversation: ${createError.message}`);
+        if (isInspectOn()) {
+            console.error("[messaging] Failed to create conversation:", createError);
+        }
+        throw new Error("Couldn't start conversation. Please try again.");
     }
 
     // Insert participants: owner with role 'owner', current user with role 'viewer'
@@ -100,8 +109,10 @@ export async function getOrCreateConversationForProperty(
         .upsert(participants, { onConflict: "conversation_id,user_id", ignoreDuplicates: true });
 
     if (partError) {
-        // Log but don't throw - conversation was created successfully
-        console.error("[messaging] Failed to add participants:", partError.message);
+        // Log only in inspect mode, don't throw - conversation was created successfully
+        if (isInspectOn()) {
+            console.error("[messaging] Failed to add participants:", partError);
+        }
     }
 
     // Debug log
@@ -145,7 +156,9 @@ export async function listMyConversations(): Promise<{
         .order("created_at", { ascending: false });
 
     if (error) {
-        console.error("[messaging] Failed to list conversations:", error.message);
+        if (isInspectOn()) {
+            console.error("[messaging] Failed to list conversations:", error);
+        }
         return [];
     }
 
@@ -191,7 +204,9 @@ export async function listMessages(
         .order("created_at", { ascending: true });
 
     if (error) {
-        console.error("[messaging] Failed to list messages:", error.message);
+        if (isInspectOn()) {
+            console.error("[messaging] Failed to list messages:", error);
+        }
         return [];
     }
 
@@ -225,7 +240,10 @@ export async function sendMessage(
         });
 
     if (error) {
-        throw new Error(`Failed to send message: ${error.message}`);
+        if (isInspectOn()) {
+            console.error("[messaging] Failed to send message:", error);
+        }
+        throw new Error("Message couldn't be sent. Please try again.");
     }
 
     // Debug log
@@ -274,11 +292,14 @@ export async function leaveUnclaimedNote(
         .eq("property_id", propertyId);
 
     if (countError) {
-        throw new Error(`Failed to check note count: ${countError.message}`);
+        if (isInspectOn()) {
+            console.error("[messaging] Failed to check note count:", countError);
+        }
+        throw new Error("Something went wrong. Please try again.");
     }
 
     if ((count ?? 0) >= 50) {
-        throw new Error("Maximum notes reached for this property (50)");
+        throw new Error("This home's inbox is full for now.");
     }
 
     // Insert note
@@ -292,10 +313,16 @@ export async function leaveUnclaimedNote(
 
     if (error) {
         // Check for unique constraint violation (one note per user per week)
-        if (error.code === "23505" || error.message.includes("duplicate") || error.message.includes("unique")) {
-            throw new Error("You've already left a note here this week. Try again next week.");
+        if (error.code === "23505" || error.message.includes("duplicate") || error.message.includes("unique") || error.message.includes("one_per_user_per_week")) {
+            if (isInspectOn()) {
+                console.error("[messaging] Weekly note limit hit:", error);
+            }
+            throw new Error("You've already left a note here this week.");
         }
-        throw new Error(`Failed to leave note: ${error.message}`);
+        if (isInspectOn()) {
+            console.error("[messaging] Failed to leave note:", error);
+        }
+        throw new Error("Couldn't leave your note. Please try again.");
     }
 
     // Debug log
@@ -337,7 +364,9 @@ export async function getPropertyAlbums(
         .order("sort_order", { ascending: true });
 
     if (error) {
-        console.error("[messaging] Failed to get property albums:", error.message);
+        if (isInspectOn()) {
+            console.error("[messaging] Failed to get property albums:", error);
+        }
         return [];
     }
 
@@ -377,7 +406,9 @@ export async function getUnlockedAlbums(
         .order("created_at", { ascending: true });
 
     if (error) {
-        console.error("[messaging] Failed to get unlocked albums:", error.message);
+        if (isInspectOn()) {
+            console.error("[messaging] Failed to get unlocked albums:", error);
+        }
         return [];
     }
 
@@ -414,7 +445,10 @@ export async function unlockAlbum(
         if (error.code === "23505") {
             return true; // Already unlocked
         }
-        throw new Error(`Failed to unlock album: ${error.message}`);
+        if (isInspectOn()) {
+            console.error("[messaging] Failed to unlock album:", error);
+        }
+        throw new Error("Couldn't share photos. Please try again.");
     }
 
     // Debug log
@@ -444,7 +478,9 @@ export async function getAlbumImages(
         .order("sort_order", { ascending: true });
 
     if (error) {
-        console.error("[messaging] Failed to get album images:", error.message);
+        if (isInspectOn()) {
+            console.error("[messaging] Failed to get album images:", error);
+        }
         return [];
     }
 
@@ -492,7 +528,9 @@ export async function listConversationsForProperty(
         .order("updated_at", { ascending: false });
 
     if (convError) {
-        console.error("[messaging] listConversationsForProperty error:", convError);
+        if (isInspectOn()) {
+            console.error("[messaging] listConversationsForProperty error:", convError);
+        }
         return [];
     }
 

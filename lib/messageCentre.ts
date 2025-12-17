@@ -1,4 +1,5 @@
 import { supabase } from "@/lib/supabase/client";
+import { isInspectOn } from "@/lib/inspect";
 
 // =============================================================================
 // MESSAGE CENTRE DATA HELPER
@@ -47,7 +48,9 @@ export async function listConversationsGroupedByProperty(): Promise<PropertyGrou
         .eq("user_id", user.id);
 
     if (partError) {
-        console.error("[messageCentre] Failed to fetch participations:", partError.message);
+        if (isInspectOn()) {
+            console.error("[messageCentre] Failed to fetch participations:", partError);
+        }
         return [];
     }
 

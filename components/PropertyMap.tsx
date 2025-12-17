@@ -12,7 +12,7 @@ import { MessageCentreOverlay } from "@/components/MessageCentreOverlay";
 import { useAuth } from "@/app/AuthProvider";
 import { inspectLog, resolveStatus, type Status } from "@/lib/inspect";
 import { getPinColor } from "@/lib/statusStyles";
-import { MapIntentProvider, type FlyToOptions } from "@/contexts/MapIntentContext";
+import { MapIntentProvider, type FlyToOptions, type OpenPropertyOptions } from "@/contexts/MapIntentContext";
 
 // =============================================================================
 // DESIGN KNOBS - Configurable constants
@@ -124,6 +124,7 @@ export default function PropertyMap() {
     const [liveFeedLoading, setLiveFeedLoading] = useState(false);
     const [vibeBarExpanded, setVibeBarExpanded] = useState(false);
     const [showMessageCentre, setShowMessageCentre] = useState(false);
+    const [pendingOpenMode, setPendingOpenMode] = useState<"card" | "messages">("card");
     const [pendingConversationId, setPendingConversationId] = useState<string | null>(null);
 
     const { accessToken, user } = useAuth();
@@ -575,15 +576,20 @@ export default function PropertyMap() {
                         },
                     }),
                 });
+                // Clear pending conversation state for direct map clicks
+                setPendingOpenMode("card");
+                setPendingConversationId(null);
                 setSelectedPropertyId(propertyId);
             }
         },
         []
     );
 
-    // Close property sheet
+    // Close property sheet - clear all pending state
     const handleCloseSheet = useCallback(() => {
         setSelectedPropertyId(null);
+        setPendingOpenMode("card");
+        setPendingConversationId(null);
     }, []);
 
     // Refresh intent overlay for a specific property or all visible
@@ -637,25 +643,23 @@ export default function PropertyMap() {
         });
     }, []);
 
-    // Message Centre: navigate to property (just open card)
-    const handleMessageCentreNavigateToProperty = useCallback((propertyId: string, lat?: number, lon?: number) => {
-        // Fly to property if coordinates available
-        if (lat !== undefined && lon !== undefined) {
-            handleFlyToProperty({ propertyId, lat, lon });
-        }
-        // Open property card (no specific conversation)
-        setPendingConversationId(null);
-        setSelectedPropertyId(propertyId);
-    }, [handleFlyToProperty]);
+    /**
+     * Unified property navigation handler.
+     * Implements the openProperty API contract from MapIntentContext.
+     */
+    const handleOpenProperty = useCallback((options: OpenPropertyOptions) => {
+        const { propertyId, openMode = "card", conversationId = null, lat, lon, zoom } = options;
 
-    // Message Centre: navigate to specific conversation
-    const handleMessageCentreNavigateToConversation = useCallback((propertyId: string, conversationId: string, lat?: number, lon?: number) => {
-        // Fly to property if coordinates available
+        // Step 1: Fly to property if coordinates provided
         if (lat !== undefined && lon !== undefined) {
-            handleFlyToProperty({ propertyId, lat, lon });
+            handleFlyToProperty({ propertyId, lat, lon, zoom });
         }
-        // Set the pending conversation so PropertyCardSheet can open it
-        setPendingConversationId(conversationId);
+
+        // Step 2: Set pending state for PropertyCardSheet
+        setPendingOpenMode(openMode);
+        setPendingConversationId(conversationId ?? null);
+
+        // Step 3: Open the property card (which will use pending state)
         setSelectedPropertyId(propertyId);
     }, [handleFlyToProperty]);
 
@@ -769,6 +773,9 @@ export default function PropertyMap() {
     const handleEventClick = useCallback(async (event: LiveFeedEvent) => {
         // Close panel first
         setVibeBarExpanded(false);
+        // Clear pending conversation state for live feed clicks
+        setPendingOpenMode("card");
+        setPendingConversationId(null);
         // Select property to open the sheet
         setSelectedPropertyId(event.property_id);
     }, []);
@@ -814,7 +821,7 @@ export default function PropertyMap() {
     }, [selectedPropertyId]);
 
     return (
-        <MapIntentProvider onRefresh={refreshIntentForProperty} onFlyTo={handleFlyToProperty}>
+        <MapIntentProvider onRefresh={refreshIntentForProperty} onFlyTo={handleFlyToProperty} onOpenProperty={handleOpenProperty}>
             <div className="relative w-full h-screen">
                 <Map
                     ref={mapRef}
@@ -1016,13 +1023,11 @@ export default function PropertyMap() {
                         propertyId={selectedPropertyId}
                         onClose={handleCloseSheet}
                         onClaimSuccess={handleClaimSuccess}
+                        initialOpenMode={pendingOpenMode}
+                        initialConversationId={pendingConversationId}
                         onSelectNeighbour={(neighbourId, lat, lon) => {
-                            // Fly to neighbour's property
-                            if (lat !== undefined && lon !== undefined) {
-                                handleFlyToProperty({ propertyId: neighbourId, lat, lon });
-                            }
-                            // Navigate to neighbour's property card
-                            setSelectedPropertyId(neighbourId);
+                            // Use unified openProperty for neighbour navigation
+                            handleOpenProperty({ propertyId: neighbourId, lat, lon, openMode: "card" });
                         }}
                     />
                 )}
@@ -1044,8 +1049,7 @@ export default function PropertyMap() {
                 {showMessageCentre && (
                     <MessageCentreOverlay
                         onClose={() => setShowMessageCentre(false)}
-                        onNavigateToProperty={handleMessageCentreNavigateToProperty}
-                        onNavigateToConversation={handleMessageCentreNavigateToConversation}
+                        onOpenProperty={handleOpenProperty}
                     />
                 )}
             </div>

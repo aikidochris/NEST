@@ -27,6 +27,10 @@ interface PropertyCardSheetProps {
     onSelectNeighbour?: (propertyId: string, lat?: number, lon?: number) => void;
     /** Whether to use mobile layout */
     isMobile?: boolean;
+    /** Initial open mode: "card" (default) or "messages" to open messaging panel */
+    initialOpenMode?: "card" | "messages";
+    /** Initial conversation ID to open directly (used with initialOpenMode="messages") */
+    initialConversationId?: string | null;
 }
 
 /**
@@ -39,6 +43,8 @@ export function PropertyCardSheet({
     onClaimSuccess,
     onSelectNeighbour,
     isMobile = false,
+    initialOpenMode = "card",
+    initialConversationId = null,
 }: PropertyCardSheetProps) {
     const { claim, claiming, error: claimError, isAuthenticated } = useClaim();
     const { refreshIntentOverlay } = useMapIntent();
@@ -46,7 +52,7 @@ export function PropertyCardSheet({
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [justClaimed, setJustClaimed] = useState(false);
-    const [showModal, setShowModal] = useState(false);
+    const [showModal, setShowModal] = useState(initialOpenMode === "messages");
 
     // Fetch property details
     useEffect(() => {
@@ -308,6 +314,9 @@ export function PropertyCardSheet({
                     onStatusUpdate={handleStatusUpdate}
                     onStoryUpdate={handleStoryUpdate}
                     onCoverUpload={handleCoverUpload}
+                    initialOpenMode={initialOpenMode}
+                    initialConversationId={initialConversationId}
+                    onSelectNeighbour={onSelectNeighbour}
                 />
             )}
         </>

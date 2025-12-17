@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { listConversationsGroupedByProperty, type PropertyGroup, type ConversationItem } from "@/lib/messageCentre";
 import { isInspectOn } from "@/lib/inspect";
+import type { OpenPropertyOptions } from "@/contexts/MapIntentContext";
 
 // =============================================================================
 // MESSAGE CENTRE OVERLAY
@@ -11,14 +12,13 @@ import { isInspectOn } from "@/lib/inspect";
 
 interface MessageCentreOverlayProps {
     onClose: () => void;
-    onNavigateToProperty: (propertyId: string, lat?: number, lon?: number) => void;
-    onNavigateToConversation: (propertyId: string, conversationId: string, lat?: number, lon?: number) => void;
+    /** Unified navigation callback using openProperty API */
+    onOpenProperty: (options: OpenPropertyOptions) => void;
 }
 
 export function MessageCentreOverlay({
     onClose,
-    onNavigateToProperty,
-    onNavigateToConversation,
+    onOpenProperty,
 }: MessageCentreOverlayProps) {
     const [groups, setGroups] = useState<PropertyGroup[]>([]);
     const [loading, setLoading] = useState(true);
@@ -52,7 +52,7 @@ export function MessageCentreOverlay({
         return () => { cancelled = true; };
     }, []);
 
-    // Handle property header click
+    // Handle property header click - opens card only (no conversation)
     const handlePropertyClick = useCallback((group: PropertyGroup) => {
         if (isInspectOn()) {
             console.log("[NEST_INSPECT] MESSAGE_CENTRE_NAVIGATE", {
@@ -61,10 +61,15 @@ export function MessageCentreOverlay({
             });
         }
         onClose();
-        onNavigateToProperty(group.property_id, group.lat ?? undefined, group.lon ?? undefined);
-    }, [onClose, onNavigateToProperty]);
+        onOpenProperty({
+            propertyId: group.property_id,
+            openMode: "card",
+            lat: group.lat ?? undefined,
+            lon: group.lon ?? undefined,
+        });
+    }, [onClose, onOpenProperty]);
 
-    // Handle conversation row click
+    // Handle conversation row click - opens card with messages + specific conversation
     const handleConversationClick = useCallback((group: PropertyGroup, conv: ConversationItem) => {
         if (isInspectOn()) {
             console.log("[NEST_INSPECT] MESSAGE_CENTRE_NAVIGATE", {
@@ -73,8 +78,14 @@ export function MessageCentreOverlay({
             });
         }
         onClose();
-        onNavigateToConversation(group.property_id, conv.conversation_id, group.lat ?? undefined, group.lon ?? undefined);
-    }, [onClose, onNavigateToConversation]);
+        onOpenProperty({
+            propertyId: group.property_id,
+            openMode: "messages",
+            conversationId: conv.conversation_id,
+            lat: group.lat ?? undefined,
+            lon: group.lon ?? undefined,
+        });
+    }, [onClose, onOpenProperty]);
 
     // Format time display
     const formatTime = (dateStr: string): string => {
