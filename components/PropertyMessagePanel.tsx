@@ -6,6 +6,7 @@ import type { PropertyPublic } from "@/types/property";
 import { isInspectOn } from "@/lib/inspect";
 import {
     getOrCreateConversationForProperty,
+    getConversationForProperty,
     listMessages,
     sendMessage,
     leaveUnclaimedNote,
@@ -18,6 +19,7 @@ import {
     type AlbumUnlock,
     type ConversationPreview,
 } from "@/lib/messaging";
+import { sendFirstReplyToWaitingNote } from "@/lib/waitingNoteReply";
 import { resolveStatus } from "@/lib/status";
 import { getChipStyle, getPublicLabel } from "@/lib/statusStyles";
 import { NeighbourSuggestModal } from "./NeighbourSuggestModal";
@@ -51,6 +53,14 @@ interface PropertyMessagePanelProps {
     conversationId?: string | null;
     /** Display mode: 'list' shows all conversations, 'thread' shows a specific conversation */
     mode?: "list" | "thread";
+    /** Draft note reply - owner replying to a waiting note (no conversation yet) */
+    draftNote?: {
+        noteId: string;
+        authorUserId: string;
+        quotedNote: { body: string; created_at: string };
+    } | null;
+    /** Whether this is an owner view (affects composer visibility) */
+    isOwnerView?: boolean;
 }
 
 export function PropertyMessagePanel({
@@ -60,13 +70,20 @@ export function PropertyMessagePanel({
     onSelectNeighbour,
     conversationId: providedConversationId,
     mode: initialMode = "thread",
+    draftNote,
+    isOwnerView = false,
 }: PropertyMessagePanelProps) {
-    const [conversationId, setConversationId] = useState<string | null>(null);
+    const [mode, setMode] = useState<"list" | "thread">(initialMode);
+    // Renamed back to conversationId to match usages
+    const [conversationId, setConversationId] = useState<string | null>(providedConversationId || null);
+    const messagesEndRef = useRef<HTMLDivElement>(null);
     const [messages, setMessages] = useState<Message[]>([]);
+    // Renamed back to newMessage
+    const [newMessage, setNewMessage] = useState("");
+    // Renamed back to isSending
+    const [isSending, setIsSending] = useState(false);
     const [unlockedAlbums, setUnlockedAlbums] = useState<AlbumUnlock[]>([]);
     const [availableAlbums, setAvailableAlbums] = useState<Album[]>([]);
-    const [newMessage, setNewMessage] = useState("");
-    const [isSending, setIsSending] = useState(false);
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [noteSent, setNoteSent] = useState(false);
@@ -79,7 +96,17 @@ export function PropertyMessagePanel({
         initialMode === "thread" && providedConversationId ? providedConversationId : null
     );
     const [resolvedUserId, setResolvedUserId] = useState<string | undefined>(currentUserId);
-    const [panelMode, setPanelMode] = useState<"list" | "thread">(initialMode);
+
+    // Format time display for quoted note
+    const formatTime = (dateStr: string): string => {
+        const date = new Date(dateStr);
+        return date.toLocaleDateString(undefined, {
+            month: 'short',
+            day: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit'
+        });
+    };
 
     // Fetch current user ID if not provided as prop
     useEffect(() => {
@@ -97,7 +124,6 @@ export function PropertyMessagePanel({
         fetchUserId();
     }, [currentUserId]);
 
-    const messagesEndRef = useRef<HTMLDivElement>(null);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
 
     const isClaimed = property.is_claimed === true;
@@ -117,12 +143,15 @@ export function PropertyMessagePanel({
     // Debug log on open
     useEffect(() => {
         if (isInspectOn()) {
-            console.log("[NEST_INSPECT] MESSAGE_PANEL_OPEN", {
+            console.log("[NEST_INSPECT] MESSAGE_PANEL_MODE", {
                 property_id: property.property_id,
-                claimed: isClaimed,
+                mode: initialMode,
+                is_owner: isOwnerView,
+                has_conversation_id: !!providedConversationId,
+                has_draft_note: !!draftNote,
             });
         }
-    }, [property.property_id, isClaimed]);
+    }, [property.property_id, initialMode, isOwnerView, providedConversationId, draftNote]);
 
     // Initialize conversation for claimed properties
     useEffect(() => {
@@ -150,20 +179,35 @@ export function PropertyMessagePanel({
                         }
                     }
                 } else if (!isOwner) {
-                    // For viewers without a provided conversation, create/get one
-                    const { conversationId: convId } = await getOrCreateConversationForProperty(
-                        property.property_id
-                    );
+                    // For viewers without a provided conversation, check if one exists
+                    // DO NOT create it yet - only on send
+                    const existing = await getConversationForProperty(property.property_id);
+
                     if (!cancelled) {
-                        setConversationId(convId);
-                        // Fetch messages and unlocks
-                        const [msgs, unlocks] = await Promise.all([
-                            listMessages(convId),
-                            getUnlockedAlbums(convId),
-                        ]);
-                        if (!cancelled) {
-                            setMessages(msgs);
-                            setUnlockedAlbums(unlocks);
+                        if (existing) {
+                            // Conversation exists -> load it
+                            console.log("[NEST_INSPECT] MESSAGE_PANEL_EXISTING_FOUND", {
+                                property_id: property.property_id,
+                                conversation_id: existing.conversationId
+                            });
+
+                            setConversationId(existing.conversationId);
+                            // Fetch messages and unlocks
+                            const [msgs, unlocks] = await Promise.all([
+                                listMessages(existing.conversationId),
+                                getUnlockedAlbums(existing.conversationId),
+                            ]);
+                            if (!cancelled) {
+                                setMessages(msgs);
+                                setUnlockedAlbums(unlocks);
+                            }
+                        } else {
+                            // No conversation yet -> nothing to load
+                            console.log("[NEST_INSPECT] MESSAGE_PANEL_NO_EXISTING", {
+                                property_id: property.property_id
+                            });
+                            // Explicitly ensure messages are empty
+                            setMessages([]);
                         }
                     }
                 } else {
@@ -172,6 +216,9 @@ export function PropertyMessagePanel({
                     if (!cancelled) {
                         setAvailableAlbums(albums);
                     }
+
+                    // Note: If we are replying to a note (initialNoteId set), we intentionally 
+                    // DON'T load a conversation yet. We wait for the first send.
                 }
             } catch (err) {
                 if (!cancelled) {
@@ -248,31 +295,95 @@ export function PropertyMessagePanel({
 
     // Handle sending message (claimed homes)
     const handleSendMessage = useCallback(async () => {
-        if (!conversationId || !newMessage.trim() || isSending) return;
+        if (!newMessage.trim() || isSending) return;
 
         setIsSending(true);
         setError(null);
 
         try {
-            await sendMessage(conversationId, newMessage.trim());
+            let activeConversationId = conversationId;
+
+            // If we have a draft note and no conversation exists yet (owner replying to waiting note)
+            if (draftNote && !activeConversationId) {
+                if (isInspectOn()) {
+                    console.log("[NEST_INSPECT] WAITING_NOTE_REPLY_SEND_START", {
+                        note_id: draftNote.noteId,
+                        author_id: draftNote.authorUserId,
+                    });
+                }
+
+                if (!resolvedUserId) throw new Error("Not authenticated");
+
+                const newConvoId = await sendFirstReplyToWaitingNote({
+                    noteId: draftNote.noteId,
+                    propertyId: property.property_id,
+                    noteBody: draftNote.quotedNote.body,
+                    replyBody: newMessage.trim(),
+                    ownerId: resolvedUserId,
+                    noteAuthorId: draftNote.authorUserId
+                });
+
+                activeConversationId = newConvoId;
+                setConversationId(newConvoId);
+                // Also set selectedOwnerConv so composer stays visible
+                setSelectedOwnerConv(newConvoId);
+
+                if (isInspectOn()) {
+                    console.log("[NEST_INSPECT] WAITING_NOTE_REPLY_SEND_DONE", {
+                        conversation_id: newConvoId,
+                    });
+                }
+
+            } else if (!activeConversationId) {
+                // Standard new conversation flow (not waiting note reply)
+                if (isInspectOn()) {
+                    console.log("[NEST_INSPECT] CONVO_CREATE_START", {
+                        property_id: property.property_id,
+                    });
+                }
+
+                const { conversationId: newId } = await getOrCreateConversationForProperty(property.property_id);
+                activeConversationId = newId;
+                setConversationId(newId);
+
+                if (isInspectOn()) {
+                    console.log("[NEST_INSPECT] CONVO_CREATED", {
+                        conversation_id: newId,
+                    });
+                }
+
+                // Then send message standard way
+                await sendMessage(activeConversationId, newMessage.trim());
+            } else {
+                // Existing conversation - standard send
+                if (isInspectOn()) {
+                    console.log("[NEST_INSPECT] MESSAGE_SEND_START", {
+                        conversation_id: activeConversationId,
+                        length: newMessage.length
+                    });
+                }
+                await sendMessage(activeConversationId, newMessage.trim());
+            }
 
             if (isInspectOn()) {
-                console.log("[NEST_INSPECT] MESSAGE_PANEL_SEND", {
+                console.log("[NEST_INSPECT] MESSAGE_SEND_DONE", {
                     property_id: property.property_id,
-                    conversation_id: conversationId,
+                    conversation_id: activeConversationId,
                 });
             }
 
             // Refresh messages
-            const msgs = await listMessages(conversationId);
-            setMessages(msgs);
+            if (activeConversationId) {
+                const msgs = await listMessages(activeConversationId);
+                setMessages(msgs);
+            }
             setNewMessage("");
         } catch (err) {
             setError(err instanceof Error ? err.message : "Failed to send message");
         } finally {
             setIsSending(false);
         }
-    }, [conversationId, newMessage, isSending, property.property_id]);
+    }, [conversationId, newMessage, isSending, property.property_id, draftNote, resolvedUserId]);
 
     // Handle leaving note (unclaimed homes)
     const handleLeaveNote = useCallback(async () => {
@@ -446,10 +557,21 @@ export function PropertyMessagePanel({
                         </p>
                     </div>
                 ) : isOwner ? (
-                    // Owner inbox view
-                    selectedOwnerConv ? (
-                        // Show conversation thread
+                    // Owner inbox view: thread mode if selectedOwnerConv OR draftNote
+                    (selectedOwnerConv || draftNote) ? (
+                        // Show conversation thread or draft reply mode
                         <div className="space-y-3">
+                            {(() => {
+                                // Inspect log for draft render
+                                if (isInspectOn() && draftNote) {
+                                    console.log("[NEST_INSPECT] WAITING_NOTE_DRAFT_RENDER", {
+                                        hasDraftNote: !!draftNote,
+                                        noteId: draftNote.noteId,
+                                        authorUserId: draftNote.authorUserId,
+                                    });
+                                }
+                                return null;
+                            })()}
                             <button
                                 onClick={() => {
                                     setSelectedOwnerConv(null);
@@ -463,7 +585,27 @@ export function PropertyMessagePanel({
                                 </svg>
                                 Back to inbox
                             </button>
-                            {streamItems.length === 0 ? (
+
+                            {/* Quoted Waiting Note Context */}
+                            {draftNote?.quotedNote && messages.length === 0 && (
+                                <div className="mx-0 mb-4 p-4 bg-amber-50 border border-amber-200 rounded-xl relative">
+                                    <div className="absolute top-3 right-3 text-amber-300">
+                                        <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                                            <path d="M14.017 21L14.017 18C14.017 16.8954 13.1216 16 12.017 16H9C9 14.9381 9.68727 14.0396 10.6558 13.7176L11.0826 13.5757C12.4468 13.1221 13.5146 12.0673 14.0118 10.724L14.3415 9.8335C14.7359 8.76802 14.4988 7.58105 13.7225 6.73507L13.7225 6.73507C12.9234 5.86407 11.7246 5.48398 10.5843 5.7408L10.5843 5.7408C8.59858 6.18804 6.84587 7.42777 5.71966 9.17641L4.85244 10.5233C4.28318 11.4075 4 12.4485 4 13.5C4 17.6421 7.35786 21 11.5 21L14.017 21ZM16.0353 10.9575L16.365 10.067C17.1539 7.93593 19.2893 6.64387 21.5 6.64387V6.64387C21.7761 6.64387 22 6.86772 22 7.14387V13.5C22 17.6421 18.6421 21 14.5 21H14.5L14.5 18C14.5 14.7733 11.969 12.1416 8.78442 12.0042C8.78652 11.9961 8.78864 11.9881 8.79079 11.98ZM14.017 21H16.017C17.5126 21 18.8872 20.4651 19.9885 19.5694C19.3332 18.672 18.9432 17.5684 18.9432 16.3814C18.9432 14.7936 20.2304 13.5064 21.8182 13.5064H22V13.5C22 13.5 16.0353 10.9575 16.0353 10.9575Z" />
+                                        </svg>
+                                    </div>
+                                    <p className="text-xs font-semibold text-amber-700 uppercase tracking-wide mb-2">Original Waiting Note</p>
+                                    <p className="text-sm text-gray-800 italic leading-relaxed">&quot;{draftNote.quotedNote.body}&quot;</p>
+                                    <p className="text-xs text-amber-600/70 mt-3 font-medium flex items-center gap-1">
+                                        <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                        </svg>
+                                        {formatTime(draftNote.quotedNote.created_at)}
+                                    </p>
+                                </div>
+                            )}
+
+                            {streamItems.length === 0 && !draftNote?.quotedNote ? (
                                 <div className="text-center py-8">
                                     <p className="text-sm text-gray-400">
                                         No messages yet
@@ -643,8 +785,8 @@ export function PropertyMessagePanel({
                 )}
             </div>
 
-            {/* Composer */}
-            {!noteSent && (!isOwner || selectedOwnerConv) && (
+            {/* Composer - show for viewers, owners with selected conv, OR owners with draft note */}
+            {!noteSent && (!isOwner || selectedOwnerConv || draftNote) && (
                 <div className="border-t border-gray-100 px-4 py-3">
                     <div className="flex items-end gap-2">
                         <textarea

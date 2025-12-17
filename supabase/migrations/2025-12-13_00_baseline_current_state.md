@@ -194,3 +194,11 @@ This has been ran in supabase
 20251216_001_spam_limit.sql - this has been applied
 20251216_002_spam_limit_final.sql - this has been applied
 20251216_003_spam_limit_finish.sql - this has been applied
+20251217_001_messaging_fix.sql - this has been applied
+20251217_002_messaging_sql_fix.sql - this has been applied
+20251225_003_messaging_fix.sql - this has been applied
+20251217_003_inserts.sql - this has been applied
+20251217_004_messages_fix.sql - this has been applied
+20251217_005_messaging.sql - this has been applied
+20251217_006_messaging.sql - this has been applied
+20251217_007_messaging.sql - this has been applied

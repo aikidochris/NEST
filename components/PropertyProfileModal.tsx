@@ -9,9 +9,9 @@ import { WaitingNotesPanel } from "./WaitingNotesPanel";
 import { PropertyMessagePanel } from "./PropertyMessagePanel";
 import { OwnerInboxPreview } from "./OwnerInboxPreview";
 import { getChipStyle, getPublicLabel, getPinColor } from "@/lib/statusStyles";
-import { type Status } from "@/lib/status";
+import { resolveStatus, type Status } from "@/lib/status";
 import { isInspectOn } from "@/lib/inspect";
-import { listConversationsForProperty } from "@/lib/messaging";
+import { listConversationsForProperty, getConversationForProperty } from "@/lib/messaging";
 
 // =============================================================================
 // PROPERTY PROFILE MODAL (Tier 2 - S06)
@@ -38,7 +38,7 @@ interface PropertyProfileModalProps {
     /** Album keys that have been unlocked (via conversation) */
     unlockedAlbums?: string[];
     /** Callback when owner replies to a waiting note */
-    onNoteReply?: (conversationId: string) => void;
+    onNoteReply?: (conversationId: string | null) => void;
     /** Initial open mode: "card" or "messages" to auto-open messaging */
     initialOpenMode?: "card" | "messages";
     /** Initial conversation ID to open directly */
@@ -135,6 +135,10 @@ export function PropertyProfileModal({
     const [ownerEntryPoint, setOwnerEntryPoint] = useState<"row" | "viewall">(
         initialConversationId ? "row" : "viewall"
     );
+    // Quoted note to display when opening a conversation from a waiting note reply
+    const [pendingQuotedNote, setPendingQuotedNote] = useState<{ body: string; created_at: string } | null>(null);
+    const [pendingNoteId, setPendingNoteId] = useState<string | null>(null);
+    const [pendingNoteAuthorId, setPendingNoteAuthorId] = useState<string | null>(null);
 
     // Load images (mocked for now)
     useEffect(() => {
@@ -167,6 +171,31 @@ export function PropertyProfileModal({
         document.addEventListener("keydown", handleKeyDown);
         return () => document.removeEventListener("keydown", handleKeyDown);
     }, [onClose]);
+
+    // Check for existing conversation (to allow bypassing status gating)
+    const [existingConversationId, setExistingConversationId] = useState<string | null>(null);
+
+    useEffect(() => {
+        // If owner, we use listConversationsForProperty separately.
+        // If viewer + authenticated + claimed -> check if we have a conversation
+        if (property.is_mine || !isAuthenticated || !property.is_claimed) return;
+
+        let cancelled = false;
+
+        async function checkExisting() {
+            try {
+                const existing = await getConversationForProperty(property.property_id);
+                if (!cancelled && existing) {
+                    setExistingConversationId(existing.conversationId);
+                }
+            } catch (err) {
+                console.error("Failed to check existing conversation:", err);
+            }
+        }
+
+        checkExisting();
+        return () => { cancelled = true; };
+    }, [property.property_id, property.is_mine, property.is_claimed, isAuthenticated]);
 
     // Check for existing conversations when owner views their property (for badge/count only)
     useEffect(() => {
@@ -274,6 +303,11 @@ export function PropertyProfileModal({
             return null; // Owner sees tools panel, not messaging CTA
         }
 
+        // If conversation ALREADY EXISTS, allow messaging regardless of status
+        if (existingConversationId) {
+            return { label: "View conversation", onClick: handleMessageOwnerClick };
+        }
+
         // Claimed + Open to Talking / For Sale / For Rent: Message owner
         if (property.is_open_to_talking || property.is_for_sale || property.is_for_rent) {
             return { label: "Message owner", onClick: handleMessageOwnerClick };
@@ -296,13 +330,20 @@ export function PropertyProfileModal({
 
         if (!property.is_claimed) return null;
 
-        // If primary is Message, secondary is Follow
+        // If primary is "View conversation" (existing), secondary is Follow
+        if (existingConversationId) {
+            return { label: "Follow", onClick: onFollow || (() => { }) };
+        }
+
+        // If primary is Message (new), secondary is Follow
         if (property.is_open_to_talking || property.is_for_sale || property.is_for_rent) {
             return { label: "Follow", onClick: onFollow || (() => { }) };
         }
 
-        // If primary is Follow, secondary is Message (if allowed)
+        // If primary is Follow, secondary is Message (if allowed or existing)
         if (property.is_settled && property.is_open_to_talking) {
+            // This case is actually covered by "Message owner" logic above in getPrimaryAction
+            // But if we ever land here:
             return { label: "Message", onClick: handleMessageOwnerClick };
         }
 
@@ -480,7 +521,31 @@ export function PropertyProfileModal({
                         <WaitingNotesPanel
                             propertyId={property.property_id}
                             isOwner={property.is_mine === true}
-                            onReply={onNoteReply}
+                            status={resolveStatus({
+                                is_claimed: property.is_claimed, intent_flags: {
+                                    soft_listing: property.is_open_to_talking ?? null,
+                                    settled: property.is_settled ?? null,
+                                    is_for_sale: property.is_for_sale ?? null,
+                                    is_for_rent: property.is_for_rent ?? null,
+                                }
+                            })}
+                            onReply={(conversationId, quotedNote, noteId, authorUserId) => {
+                                if (isInspectOn()) {
+                                    console.log("[NEST_INSPECT] WAITING_NOTE_REPLY_CLICK", {
+                                        property_id: property.property_id,
+                                        note_id: noteId,
+                                        author_user_id: authorUserId,
+                                    });
+                                }
+                                setSelectedOwnerConversationId(conversationId);
+                                setPendingQuotedNote(quotedNote);
+                                setPendingNoteId(noteId);
+                                setPendingNoteAuthorId(authorUserId);
+                                setOwnerPanelMode("thread");
+                                setOwnerEntryPoint("row");
+                                setShowOwnerInbox(true);
+                                onNoteReply?.(conversationId);
+                            }}
                         />
 
                         {/* Owner inbox: preview when collapsed, full panel when expanded */}
@@ -495,12 +560,21 @@ export function PropertyProfileModal({
                                                     // Always return to summary view when closing
                                                     setShowOwnerInbox(false);
                                                     setSelectedOwnerConversationId(null);
+                                                    setPendingQuotedNote(null);
+                                                    setPendingNoteId(null);
+                                                    setPendingNoteAuthorId(null);
                                                     setOwnerPanelMode("list");
                                                     setOwnerEntryPoint("viewall");
                                                 }}
                                                 conversationId={selectedOwnerConversationId}
                                                 onSelectNeighbour={onSelectNeighbour}
                                                 mode={ownerPanelMode}
+                                                isOwnerView={true}
+                                                draftNote={pendingNoteId && pendingNoteAuthorId && pendingQuotedNote ? {
+                                                    noteId: pendingNoteId,
+                                                    authorUserId: pendingNoteAuthorId,
+                                                    quotedNote: pendingQuotedNote,
+                                                } : null}
                                             />
                                         </div>
                                     </div>

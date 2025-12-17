@@ -44,6 +44,7 @@ export async function listWaitingNotesForMyProperty(
         .from("unclaimed_notes")
         .select("id, note_text, sender_user_id, created_at")
         .eq("property_id", propertyId)
+        .is("handled_at", null)
         .order("created_at", { ascending: true });
 
     if (error) {

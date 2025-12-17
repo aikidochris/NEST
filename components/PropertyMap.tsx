@@ -8,7 +8,7 @@ import type { BBox } from "@/types/property";
 import { AuthControls } from "@/components/AuthControls";
 import { PropertyCardSheet } from "@/components/PropertyCardSheet";
 import { AreaVibeBar, type VibeStats, type LiveFeedEvent } from "@/components/AreaVibeBar";
-import { MessageCentreOverlay } from "@/components/MessageCentreOverlay";
+import { GlobalInboxOverlay } from "@/components/GlobalInboxOverlay";
 import { useAuth } from "@/app/AuthProvider";
 import { inspectLog, resolveStatus, type Status } from "@/lib/inspect";
 import { getPinColor } from "@/lib/statusStyles";
@@ -84,7 +84,7 @@ interface IntentOverlayData {
 // =============================================================================
 
 /** Layer IDs that contain individual property points (non-cluster) */
-const QUERYABLE_POINT_LAYERS = ["property-points", "my-claims"];
+const QUERYABLE_POINT_LAYERS = ["property-points"];
 
 /**
  * Safely query rendered features from multiple layers.
@@ -116,7 +116,6 @@ export default function PropertyMap() {
     const mapRef = useRef<MapRef>(null);
     const [viewState, setViewState] = useState(DEFAULT_VIEW);
     const [selectedPropertyId, setSelectedPropertyId] = useState<string | null>(null);
-    const [myClaimsData, setMyClaimsData] = useState<GeoJSON.FeatureCollection>(EMPTY_GEOJSON);
     const [clusterData, setClusterData] = useState<GeoJSON.FeatureCollection>(EMPTY_GEOJSON);
     const [vibeStats, setVibeStats] = useState<VibeStats | null>(null);
     const [vibeLoading, setVibeLoading] = useState(false);
@@ -128,9 +127,6 @@ export default function PropertyMap() {
     const [pendingConversationId, setPendingConversationId] = useState<string | null>(null);
 
     const { accessToken, user } = useAuth();
-
-    // Abort controllers
-    const claimsAbortRef = useRef<AbortController | null>(null);
     const clusterAbortRef = useRef<AbortController | null>(null);
     const vibeAbortRef = useRef<AbortController | null>(null);
     const liveFeedAbortRef = useRef<AbortController | null>(null);
@@ -201,43 +197,6 @@ export default function PropertyMap() {
         }
     }, []);
 
-    // Fetch my-claims GeoJSON overlay
-    const fetchMyClaims = useCallback(
-        async (bbox: BBox) => {
-            if (!accessToken) {
-                setMyClaimsData(EMPTY_GEOJSON);
-                return;
-            }
-
-            if (claimsAbortRef.current) {
-                claimsAbortRef.current.abort();
-            }
-
-            const controller = new AbortController();
-            claimsAbortRef.current = controller;
-
-            try {
-                const bboxParam = `${bbox.minLon},${bbox.minLat},${bbox.maxLon},${bbox.maxLat}`;
-                const response = await fetch(`/api/my-claims?bbox=${bboxParam}`, {
-                    headers: { Authorization: `Bearer ${accessToken}` },
-                    signal: controller.signal,
-                });
-
-                if (!response.ok) {
-                    setMyClaimsData(EMPTY_GEOJSON);
-                    return;
-                }
-
-                const geojson = await response.json();
-                setMyClaimsData(geojson);
-            } catch (err) {
-                if (err instanceof Error && err.name === "AbortError") return;
-                setMyClaimsData(EMPTY_GEOJSON);
-            }
-        },
-        [accessToken]
-    );
-
     // Fetch vibe stats for area
     const fetchVibeStats = useCallback(async (bbox: BBox) => {
         const gridKey = bboxToGridKey(bbox);
@@ -300,7 +259,6 @@ export default function PropertyMap() {
             }
 
             debounceTimerRef.current = setTimeout(() => {
-                fetchMyClaims(bbox);
                 fetchClusterData(bbox, zoom);
                 fetchVibeStats(bbox);
                 currentBboxRef.current = bbox;
@@ -310,7 +268,7 @@ export default function PropertyMap() {
                 }
             }, DEBOUNCE_MS);
         },
-        [fetchMyClaims, fetchClusterData, fetchVibeStats, vibeBarExpanded]
+        [fetchClusterData, fetchVibeStats, vibeBarExpanded]
     );
 
     // Fetch live feed events
@@ -428,13 +386,12 @@ export default function PropertyMap() {
 
             if (bounds) {
                 const bbox = computeBBox(bounds);
-                fetchMyClaims(bbox);
                 fetchClusterData(bbox, map.getZoom());
                 fetchVibeStats(bbox);
             }
 
             // Pointer cursor on interactive layers
-            const interactiveLayers = ["property-points", "my-claims", "clusters", "intent-overlay"];
+            const interactiveLayers = ["property-points", "clusters", "intent-overlay"];
             interactiveLayers.forEach((layer) => {
                 map.on("mouseenter", layer, () => {
                     map.getCanvas().style.cursor = "pointer";
@@ -467,7 +424,7 @@ export default function PropertyMap() {
                 captureVisiblePropertyIds();
             });
         },
-        [fetchMyClaims, fetchClusterData, fetchVibeStats, captureVisiblePropertyIds]
+        [fetchClusterData, fetchVibeStats, captureVisiblePropertyIds]
     );
 
     // Handle map click - cluster zoom or property select
@@ -512,12 +469,11 @@ export default function PropertyMap() {
             }
 
             // Individual property click
-            const myClaimFeature = features.find((f) => f.layer?.id === "my-claims");
             const overlayFeature = features.find((f) => f.layer?.id === "intent-overlay");
             const baseFeature = features.find((f) => f.layer?.id === "property-points");
             const unclusteredFeature = features.find((f) => f.layer?.id === "unclustered-point");
 
-            const feature = myClaimFeature || overlayFeature || baseFeature || unclusteredFeature;
+            const feature = overlayFeature || baseFeature || unclusteredFeature;
             if (!feature) return;
 
             const propertyId = feature.properties?.property_id;
@@ -529,14 +485,11 @@ export default function PropertyMap() {
                 // Check if we have overlay data for more accurate status
                 const overlay = intentOverlayRef.current.get(propertyId);
 
-                // Determine is_claimed: my-claims layer is always claimed, overlay takes priority
+                // Determine is_claimed: overlay takes priority
                 const raw_is_claimed = props.is_claimed;
                 let is_claimed: boolean | null;
                 if (overlay) {
                     is_claimed = overlay.is_claimed;
-                } else if (source_layer === "my-claims") {
-                    // My-claims layer features are definitionally claimed by current user
-                    is_claimed = true;
                 } else if (typeof raw_is_claimed === "boolean") {
                     is_claimed = raw_is_claimed;
                 } else {
@@ -605,20 +558,13 @@ export default function PropertyMap() {
         setIntentOverlayVersion((v) => v + 1);
     }, [fetchIntentOverlay, captureVisiblePropertyIds]);
 
-    // After claim success, refetch my-claims overlay and intent
+    // After claim success, refresh intent
     const handleClaimSuccess = useCallback(() => {
-        const map = mapRef.current?.getMap();
-        if (map) {
-            const bounds = map.getBounds();
-            if (bounds) {
-                fetchMyClaims(computeBBox(bounds));
-            }
-        }
-        // Also refresh intent for the selected property
+        // Refresh intent for the selected property
         if (selectedPropertyId) {
             refreshIntentForProperty(selectedPropertyId);
         }
-    }, [fetchMyClaims, selectedPropertyId, refreshIntentForProperty]);
+    }, [selectedPropertyId, refreshIntentForProperty]);
 
     // Fly to a property's coordinates
     const handleFlyToProperty = useCallback((options: FlyToOptions) => {
@@ -666,7 +612,6 @@ export default function PropertyMap() {
     // Cleanup on unmount
     useEffect(() => {
         return () => {
-            claimsAbortRef.current?.abort();
             clusterAbortRef.current?.abort();
             vibeAbortRef.current?.abort();
             liveFeedAbortRef.current?.abort();
@@ -785,12 +730,9 @@ export default function PropertyMap() {
         const map = mapRef.current?.getMap();
         if (!map) return;
 
-        const claimsSource = map.getSource("my-claims-source") as GeoJSONSource | undefined;
-        if (claimsSource) claimsSource.setData(myClaimsData);
-
         const clusterSource = map.getSource("cluster-source") as GeoJSONSource | undefined;
         if (clusterSource) clusterSource.setData(clusterData);
-    }, [myClaimsData, clusterData]);
+    }, [clusterData]);
 
     // Update intent overlay source when overlayGeoJSON changes (explicit setData for MapLibre repaint)
     useEffect(() => {
@@ -830,7 +772,7 @@ export default function PropertyMap() {
                     onMoveEnd={handleMoveEnd}
                     onLoad={handleLoad}
                     onClick={handleMapClick}
-                    interactiveLayerIds={["property-points", "my-claims", "clusters", "unclustered-point", "intent-overlay"]}
+                    interactiveLayerIds={["property-points", "clusters", "unclustered-point", "intent-overlay"]}
                     style={{ width: "100%", height: "100%" }}
                     mapStyle={MAP_STYLE}
                 >
@@ -966,30 +908,7 @@ export default function PropertyMap() {
                         />
                     </Source>
 
-                    {/* GeoJSON source for user's claimed properties (neutral base - intent overlay adds color) */}
-                    <Source
-                        id="my-claims-source"
-                        type="geojson"
-                        data={myClaimsData}
-                    >
-                        <Layer
-                            id="my-claims"
-                            type="circle"
-                            paint={{
-                                // Invisible base layer - intent overlay provides visible pins
-                                // Kept for queryable hit-testing
-                                "circle-color": "#000000",
-                                "circle-radius": [
-                                    "interpolate", ["linear"], ["zoom"],
-                                    8, 3,
-                                    12, 6,
-                                    16, 9
-                                ],
-                                "circle-opacity": 0,
-                                "circle-stroke-opacity": 0,
-                            }}
-                        />
-                    </Source>
+
                 </Map>
 
                 {/* Top-left controls */}
@@ -1008,13 +927,7 @@ export default function PropertyMap() {
                             <span className="text-sm font-medium text-gray-700">Messages</span>
                         </button>
                     )}
-                    <div className="bg-white/90 backdrop-blur-sm rounded-lg px-3 py-2 shadow-md text-sm">
-                        <span className="text-gray-700">
-                            {myClaimsData.features.length > 0
-                                ? `${myClaimsData.features.length} claimed`
-                                : showClusters ? "Clustered view" : "Vector tiles"}
-                        </span>
-                    </div>
+
                 </div>
 
                 {/* Property card sheet */}
@@ -1045,9 +958,9 @@ export default function PropertyMap() {
                     />
                 )}
 
-                {/* Message Centre Overlay */}
+                {/* Global Inbox Overlay */}
                 {showMessageCentre && (
-                    <MessageCentreOverlay
+                    <GlobalInboxOverlay
                         onClose={() => setShowMessageCentre(false)}
                         onOpenProperty={handleOpenProperty}
                     />

@@ -1,5 +1,5 @@
 import { supabase } from "@/lib/supabase/client";
-import { isInspectOn } from "@/lib/inspect";
+import { isInspectOn, inspectLog } from "@/lib/inspect";
 
 // =============================================================================
 // MESSAGE CENTRE DATA HELPER
@@ -42,6 +42,7 @@ export async function listConversationsGroupedByProperty(): Promise<PropertyGrou
                 id,
                 property_id,
                 owner_user_id,
+                created_by_user_id,
                 updated_at
             )
         `)
@@ -65,6 +66,7 @@ export async function listConversationsGroupedByProperty(): Promise<PropertyGrou
             conversation_id: conv.id as string,
             property_id: conv.property_id as string,
             owner_user_id: conv.owner_user_id as string,
+            created_by_user_id: conv.created_by_user_id as string,
             updated_at: conv.updated_at as string,
             role: p.role as string,
         };
@@ -105,10 +107,47 @@ export async function listConversationsGroupedByProperty(): Promise<PropertyGrou
         });
     }
 
-    // Step 4: Group conversations by property
-    const propertyGroupMap = new Map<string, PropertyGroup>();
+    // Deduplicate by (property_id + counterparty user) - keep newest by updated_at
+    const dedupeKey = (c: typeof conversationsData[0]) => {
+        const counterpartyId = c.role === "owner" ? c.created_by_user_id : c.owner_user_id;
+        return `${c.property_id}::${counterpartyId}`;
+    };
+
+    // Sort by updated_at desc first so we pick the newest
+    conversationsData.sort((a, b) =>
+        new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
+    );
+
+    const seenKeys = new Map<string, string[]>();
+    const uniqueConversations: typeof conversationsData = [];
 
     for (const conv of conversationsData) {
+        const key = dedupeKey(conv);
+        if (!seenKeys.has(key)) {
+            seenKeys.set(key, [conv.conversation_id]);
+            uniqueConversations.push(conv);
+        } else {
+            seenKeys.get(key)!.push(conv.conversation_id);
+        }
+    }
+
+    // Log collapsed duplicates
+    for (const [key, ids] of seenKeys) {
+        if (ids.length > 1) {
+            const [property_id] = key.split("::");
+            inspectLog("INBOX_DEDUPE_COLLAPSED", {
+                property_id,
+                conversation_ids: ids,
+                kept_newest: ids[0],
+                collapsed_count: ids.length - 1,
+            });
+        }
+    }
+
+    // Step 4: Group conversations by property (using deduplicated list)
+    const propertyGroupMap = new Map<string, PropertyGroup>();
+
+    for (const conv of uniqueConversations) {
         const propInfo = propertyMap.get(conv.property_id) || { label: "Unknown address", lat: null, lon: null };
         const lastMsg = lastMessageMap.get(conv.conversation_id);
 

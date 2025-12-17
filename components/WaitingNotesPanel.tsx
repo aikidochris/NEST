@@ -1,8 +1,8 @@
-"use client";
-
 import { useState, useEffect, useCallback } from "react";
 import { listWaitingNotesForMyProperty } from "@/lib/unclaimedNotes";
-import { replyToWaitingNote } from "@/lib/waitingNoteReply";
+import { convertWaitingNoteToConversation } from "@/lib/waitingNoteReply";
+import { canStartConversation, type Status } from "@/lib/status";
+import { isInspectOn } from "@/lib/inspect";
 
 // =============================================================================
 // WAITING NOTES PANEL
@@ -20,18 +20,20 @@ interface WaitingNote {
 interface WaitingNotesPanelProps {
     propertyId: string;
     isOwner: boolean;
-    /** Callback when owner replies to a note - receives the new conversation ID */
-    onReply?: (conversationId: string) => void;
+    status: Status; // Added status prop
+    /** Callback when owner replies to a note - receives the new conversation ID (if created) or null (if drafting) and quoted context, note ID, and author ID */
+    onReply?: (conversationId: string | null, quotedNote: { body: string; created_at: string }, noteId: string, authorUserId: string) => void;
 }
 
 export function WaitingNotesPanel({
     propertyId,
     isOwner,
+    status,
     onReply,
 }: WaitingNotesPanelProps) {
     const [notes, setNotes] = useState<WaitingNote[]>([]);
     const [loading, setLoading] = useState(true);
-    const [replyingNoteId, setReplyingNoteId] = useState<string | null>(null);
+    // Removed replyingNoteId as we're not doing async conversion here anymore
 
     useEffect(() => {
         if (!isOwner) {
@@ -62,28 +64,26 @@ export function WaitingNotesPanel({
     }, [propertyId, isOwner]);
 
     // Handle reply to a note
-    const handleReply = useCallback(async (note: WaitingNote) => {
-        setReplyingNoteId(note.id);
-
-        try {
-            const { conversationId } = await replyToWaitingNote({
-                noteId: note.id,
-                propertyId,
-                noteBody: note.body,
-                noteAuthorId: note.sender_user_id,
+    const handleReply = useCallback((note: WaitingNote) => {
+        if (isInspectOn()) {
+            console.log("[NEST_INSPECT] WAITING_NOTE_REPLY_OPEN", {
+                note_id: note.id,
+                property_id: propertyId,
+                status,
             });
-
-            // Remove note from local state
-            setNotes(prev => prev.filter(n => n.id !== note.id));
-
-            // Trigger callback to open messaging
-            onReply?.(conversationId);
-        } catch (err) {
-            console.error("Failed to reply to note:", err);
-        } finally {
-            setReplyingNoteId(null);
         }
-    }, [propertyId, onReply]);
+
+        // We no longer convert immediately. Pass intent to parent to open composer.
+        // conversationId is null because it doesn't exist yet.
+        onReply?.(null, {
+            body: note.body,
+            created_at: note.created_at
+        }, note.id, note.sender_user_id);
+
+    }, [propertyId, onReply, status]);
+
+    // Check if reply is allowed
+    const canReply = canStartConversation(status);
 
     // Don't render if not owner or no notes
     if (!isOwner || loading || notes.length === 0) {
@@ -108,13 +108,20 @@ export function WaitingNotesPanel({
                             <p className="text-xs text-gray-400">
                                 Received {formatRelativeTime(note.created_at)}
                             </p>
-                            <button
-                                onClick={() => handleReply(note)}
-                                disabled={replyingNoteId === note.id}
-                                className="px-3 py-1 text-xs font-medium text-gray-600 hover:text-gray-900 bg-white border border-gray-200 hover:border-gray-300 rounded-lg transition-colors disabled:opacity-50"
-                            >
-                                {replyingNoteId === note.id ? "Replying…" : "Reply"}
-                            </button>
+                            <div className="flex items-center gap-2">
+                                {!canReply && (
+                                    <span className="text-xs text-gray-400 italic">
+                                        Turn on Open to Talking to reply
+                                    </span>
+                                )}
+                                <button
+                                    onClick={() => handleReply(note)}
+                                    disabled={!canReply}
+                                    className="px-3 py-1 text-xs font-medium text-gray-600 hover:text-gray-900 bg-white border border-gray-200 hover:border-gray-300 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                >
+                                    Reply
+                                </button>
+                            </div>
                         </div>
                     </div>
                 ))}

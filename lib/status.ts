@@ -65,3 +65,23 @@ export function resolveStatus(input: {
     // Claimed with no explicit intent - grey pin
     return "owner_no_status";
 }
+
+/**
+ * Check if a new conversation can be started based on property status.
+ * Returns true if users can start NEW conversations.
+ * Returns false if settled OR owner_no_status (or other restrictive states).
+ */
+export function canStartConversation(status: Status): boolean {
+    switch (status) {
+        case "open_to_talking":
+        case "for_sale":
+        case "for_rent":
+            return true;
+        case "settled":
+        case "owner_no_status":
+        case "unclaimed":
+        case "claimed": // Deprecated but treat as no status
+        case "unknown":
+            return false;
+    }
+}
