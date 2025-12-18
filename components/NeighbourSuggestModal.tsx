@@ -139,7 +139,7 @@ export function NeighbourSuggestModal({
                                             </span>
                                         </div>
                                     </div>
-                                    <span className="flex-shrink-0 px-3 py-1.5 text-xs font-medium text-teal-700 bg-teal-50 hover:bg-teal-100 rounded-lg transition-colors">
+                                    <span className="flex-shrink-0 px-3 py-1.5 text-xs font-medium text-ember bg-ember/10 hover:bg-ember/20 rounded-lg transition-colors">
                                         Message
                                     </span>
                                 </button>

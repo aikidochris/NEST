@@ -47,11 +47,8 @@ export function resolveStatus(input: {
 }): Status {
     const { is_claimed, intent_flags } = input;
 
-    // Unclaimed property
-    if (is_claimed === false) return "unclaimed";
-
-    // Unknown claim state - debug only
-    if (is_claimed === null || is_claimed === undefined) return "unknown";
+    // Unclaimed property (false or null)
+    if (is_claimed === false || is_claimed === null || is_claimed === undefined) return "unclaimed";
 
     // Claimed property (is_claimed === true) - check intent flags
     // Priority: for_sale > for_rent > open_to_talking > settled

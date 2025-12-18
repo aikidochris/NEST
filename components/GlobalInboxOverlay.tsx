@@ -133,8 +133,8 @@ export function GlobalInboxOverlay({
                                     className="w-full px-4 py-3 hover:bg-gray-50 text-left transition-colors"
                                 >
                                     <div className="flex items-start gap-3">
-                                        <div className="w-10 h-10 bg-teal-50 rounded-lg flex items-center justify-center flex-shrink-0">
-                                            <svg className="w-5 h-5 text-teal-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <div className="w-10 h-10 bg-ember/10 rounded-lg flex items-center justify-center flex-shrink-0">
+                                            <svg className="w-5 h-5 text-ember" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
                                             </svg>
                                         </div>
@@ -147,7 +147,7 @@ export function GlobalInboxOverlay({
                                                     {formatTime(conv.last_message_at)}
                                                 </p>
                                             </div>
-                                            <p className="text-xs text-teal-600 mt-0.5">
+                                            <p className="text-xs text-ember mt-0.5">
                                                 {conv.counterparty_label}
                                             </p>
                                             <p className="text-sm text-gray-500 truncate mt-1">

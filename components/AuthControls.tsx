@@ -22,7 +22,7 @@ export function AuthControls() {
         return (
             <Link
                 href="/auth/login"
-                className="bg-white/90 backdrop-blur-sm rounded-lg px-3 py-2 shadow-md text-sm text-blue-600 hover:text-blue-800 transition-colors"
+                className="bg-white/90 backdrop-blur-sm rounded-lg px-3 py-2 shadow-md text-sm text-ember hover:opacity-80 transition-opacity"
             >
                 Sign in
             </Link>
@@ -31,10 +31,10 @@ export function AuthControls() {
 
     return (
         <div className="bg-white/90 backdrop-blur-sm rounded-lg px-3 py-2 shadow-md text-sm flex items-center gap-2">
-            <span className="text-gray-700 truncate max-w-[150px]">{user.email}</span>
+            <span className="text-ink truncate max-w-[150px]">{user.email}</span>
             <button
                 onClick={signOut}
-                className="text-red-600 hover:text-red-800 transition-colors"
+                className="text-gray-500 hover:text-ink transition-colors"
             >
                 Sign out
             </button>

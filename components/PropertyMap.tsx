@@ -26,6 +26,7 @@ const CLUSTER_MAX_ZOOM = 15;            // Clusters disappear at zoom > 15
 // MAP CONFIGURATION
 // =============================================================================
 const MAP_STYLE = "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json";
+const ARCGIS_SATELLITE_URL = "https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}";
 const DEFAULT_VIEW = {
     longitude: -1.5,
     latitude: 55.05,
@@ -79,6 +80,31 @@ interface IntentOverlayData {
     is_for_rent: boolean | null;
 }
 
+/**
+ * Clean Lens: Hide commercial POIs (Retail, Petrol, Coffee).
+ */
+function hideCommercialPOIs(map: maplibregl.Map) {
+    const commercialLayers = [
+        "poi-retail",
+        "poi-gas",
+        "poi-cafe",
+        "poi-restaurant",
+        "poi-commercial",
+        "poi-bank",
+        "poi-hospital",
+        "poi-school"
+    ];
+    commercialLayers.forEach((id) => {
+        try {
+            if (map.getLayer(id)) {
+                map.setLayoutProperty(id, "visibility", "none");
+            }
+        } catch (e) {
+            // Layer may not exist in this style
+        }
+    });
+}
+
 // =============================================================================
 // LAYER QUERY HELPERS
 // =============================================================================
@@ -125,6 +151,8 @@ export default function PropertyMap() {
     const [showMessageCentre, setShowMessageCentre] = useState(false);
     const [pendingOpenMode, setPendingOpenMode] = useState<"card" | "messages">("card");
     const [pendingConversationId, setPendingConversationId] = useState<string | null>(null);
+    const [viewMode, setViewMode] = useState<"paper" | "blueprint" | "satellite">("paper");
+    const [is3D, setIs3D] = useState(true);  // 2D/3D performance toggle
 
     const { accessToken, user } = useAuth();
     const clusterAbortRef = useRef<AbortController | null>(null);
@@ -144,6 +172,7 @@ export default function PropertyMap() {
     const [visiblePropertyIds, setVisiblePropertyIds] = useState<string[]>([]);
     const intentOverlayRef = useRef<globalThis.Map<string, IntentOverlayData>>(new globalThis.Map());
     const [intentOverlayVersion, setIntentOverlayVersion] = useState(0);
+    const [pulseRadius, setPulseRadius] = useState(0);
 
     // Fetch cluster data (GeoJSON for clustering at low zoom)
     const fetchClusterData = useCallback(async (bbox: BBox, zoom: number) => {
@@ -376,6 +405,9 @@ export default function PropertyMap() {
             }
             return idsArray;
         });
+
+        // Force overlay recalculation by bumping version
+        setIntentOverlayVersion((v) => v + 1);
     }, []);
 
     // Initial fetch on map load + set up cursor handlers
@@ -401,6 +433,9 @@ export default function PropertyMap() {
                 });
             });
 
+            // Clean Lens logic: Hide commercial POIs
+            hideCommercialPOIs(map);
+
             // Log layer availability once on first idle
             let hasLoggedLayers = false;
             const logLayersOnce = () => {
@@ -423,9 +458,199 @@ export default function PropertyMap() {
                 logLayersOnce();
                 captureVisiblePropertyIds();
             });
+
+            // Multiple delayed captures to ensure we catch tile loads at different timings
+            setTimeout(() => captureVisiblePropertyIds(), 300);
+            setTimeout(() => captureVisiblePropertyIds(), 800);
+            setTimeout(() => captureVisiblePropertyIds(), 1500);
         },
         [fetchClusterData, fetchVibeStats, captureVisiblePropertyIds]
     );
+
+    // Ensure pin layers persist and stay on top (simplified - only handles vector source)
+    const ensurePinLayers = useCallback(() => {
+        const map = mapRef.current?.getMap();
+        if (!map || !map.isStyleLoaded()) return;
+
+        // Re-add 'properties-vt' source if missing
+        if (!map.getSource("properties-vt")) {
+            try {
+                map.addSource("properties-vt", {
+                    type: "vector",
+                    tiles: [`${typeof window !== "undefined" ? window.location.origin : ""}/api/tiles/properties/{z}/{x}/{y}`],
+                    minzoom: 0,
+                    maxzoom: 14
+                });
+            } catch { /* already exists */ }
+        }
+
+        // Hide commercial POIs
+        hideCommercialPOIs(map);
+
+        // Explicit layer ordering
+        if (map.getLayer("satellite-layer")) {
+            try {
+                const firstLayerId = map.getStyle().layers?.[0]?.id;
+                if (firstLayerId && firstLayerId !== "satellite-layer") {
+                    map.moveLayer("satellite-layer", firstLayerId);
+                }
+            } catch { /* ignore */ }
+        }
+
+        if (map.getLayer("building-3d")) {
+            try {
+                map.moveLayer("building-3d");
+            } catch { /* ignore */ }
+        }
+
+        // Move pin layers to very top
+        ["pin-pulse", "intent-overlay", "pin-glyphs"].forEach(id => {
+            if (map.getLayer(id)) {
+                try { map.moveLayer(id); } catch { /* ignore */ }
+            }
+        });
+
+    }, []);
+
+    // Effect to handle mode switching, 3D toggle, and layer persistence
+    useEffect(() => {
+        const map = mapRef.current?.getMap();
+        if (!map) return;
+
+        // Add 3D building extrusion layer (6.5m height, static opacity)
+        const add3DBuildings = () => {
+            if (!is3D) return;  // Skip if 2D mode
+            if (map.getLayer("building-3d")) return;
+            if (!map.isStyleLoaded()) return;
+
+            const existingBuilding = map.getStyle()?.layers?.find(l =>
+                l.id.includes("building") && l.type === "fill"
+            );
+
+            if (existingBuilding && 'source' in existingBuilding) {
+                try {
+                    // Collect active property IDs for Hearth Glow
+                    const activeIds: string[] = [];
+                    intentOverlayRef.current.forEach((data, pid) => {
+                        if (data.soft_listing || data.is_for_sale || data.is_for_rent) {
+                            activeIds.push(pid);
+                        }
+                    });
+
+                    map.addLayer({
+                        id: "building-3d",
+                        source: existingBuilding.source as string,
+                        "source-layer": "source-layer" in existingBuilding ? (existingBuilding["source-layer"] as string) : "building",
+                        type: "fill-extrusion",
+                        minzoom: 14,
+                        paint: {
+                            // Hearth 3D Glow: Ember for active, Ghost White for others
+                            "fill-extrusion-color": activeIds.length > 0 ? [
+                                "case",
+                                ["in", ["get", "property_id"], ["literal", activeIds]],
+                                "#E08E5F",
+                                "#FFFFFF"
+                            ] : "#FFFFFF",
+                            "fill-extrusion-height": 6.5,
+                            "fill-extrusion-base": 0,
+                            "fill-extrusion-opacity": 0.6
+                        }
+                    });
+                } catch (e) {
+                    console.warn("Could not add 3D buildings:", e);
+                }
+            }
+        };
+
+        // Remove 3D buildings
+        const remove3DBuildings = () => {
+            if (map.getLayer("building-3d")) {
+                try { map.removeLayer("building-3d"); } catch { /* ignore */ }
+            }
+        };
+
+        // Stack layers: Satellite (bottom) -> Buildings (if 3D) -> Pins (top)
+        const stackLayers = () => {
+            // 1. Satellite at absolute bottom
+            if (map.getLayer("satellite-layer")) {
+                try {
+                    const firstLayerId = map.getStyle().layers?.[0]?.id;
+                    if (firstLayerId && firstLayerId !== "satellite-layer") {
+                        map.moveLayer("satellite-layer", firstLayerId);
+                    }
+                } catch { /* ignore */ }
+            }
+
+            // 2. 3D buildings above satellite
+            if (map.getLayer("building-3d")) {
+                try { map.moveLayer("building-3d"); } catch { /* ignore */ }
+            }
+
+            // 3. Pins on very top
+            ["property-points", "pin-pulse", "intent-overlay", "pin-glyphs"].forEach(id => {
+                if (map.getLayer(id)) {
+                    try { map.moveLayer(id); } catch { /* ignore */ }
+                }
+            });
+        };
+
+        // Style update handler - runs on style.load
+        const handleStyleUpdate = () => {
+            if (!map.isStyleLoaded()) return;
+
+            // Hide commercial POIs
+            hideCommercialPOIs(map);
+
+            // Handle 3D mode - buildings available in ALL modes when is3D is true
+            if (is3D) {
+                add3DBuildings();
+                // Reveal architectural depth with pitch
+                if (map.getPitch() < 30) {
+                    map.easeTo({ pitch: 45, duration: 800 });
+                }
+            } else {
+                remove3DBuildings();
+                // Return to perfect top-down view
+                if (map.getPitch() > 0) {
+                    map.easeTo({ pitch: 0, duration: 800 });
+                }
+            }
+
+            // Stack layers correctly
+            stackLayers();
+
+            // Ensure pin layers exist
+            ensurePinLayers();
+
+            // Capture visible IDs immediately to trigger intent fetch
+            setTimeout(() => captureVisiblePropertyIds(), 100);
+        };
+
+        // Handler for sourcedata event to capture visible IDs when tiles load
+        const handleSourceData = (e: maplibregl.MapSourceDataEvent) => {
+            if (e.sourceId === "properties-vt" && e.isSourceLoaded) {
+                captureVisiblePropertyIds();
+            }
+        };
+
+        // Listen for style.load to re-add our custom layers after style changes
+        map.on("style.load", handleStyleUpdate);
+
+        // Listen for sourcedata to capture visible IDs when tiles load
+        map.on("sourcedata", handleSourceData);
+
+        // Initial update if style is already loaded
+        if (map.isStyleLoaded()) {
+            handleStyleUpdate();
+        } else {
+            map.once("style.load", handleStyleUpdate);
+        }
+
+        return () => {
+            map.off("style.load", handleStyleUpdate);
+            map.off("sourcedata", handleSourceData);
+        };
+    }, [viewMode, is3D, ensurePinLayers, captureVisiblePropertyIds]);
 
     // Handle map click - cluster zoom or property select
     const handleMapClick = useCallback(
@@ -625,6 +850,27 @@ export default function PropertyMap() {
         };
     }, []);
 
+    // Living Pin Pulse Animation (4s cycle)
+    useEffect(() => {
+        let startTime = Date.now();
+        let animationFrame: number;
+
+        const animate = () => {
+            const now = Date.now();
+            const elapsed = (now - startTime) % 4000;
+            const t = elapsed / 4000; // 0 to 1
+
+            // Gaussian-ish pulse: 0 -> 1 -> 0
+            const pulse = Math.exp(-Math.pow(t - 0.5, 2) / 0.05);
+            setPulseRadius(pulse);
+
+            animationFrame = requestAnimationFrame(animate);
+        };
+
+        animate();
+        return () => cancelAnimationFrame(animationFrame);
+    }, []);
+
     // Debounced effect to fetch intent overlay when visible IDs change
     useEffect(() => {
         if (visiblePropertyIds.length === 0) return;
@@ -664,11 +910,26 @@ export default function PropertyMap() {
             const pid = f.properties?.property_id;
             if (typeof pid !== "string" || pid.length === 0) continue;
 
-            const overlay = intentOverlayRef.current.get(pid);
-            if (!overlay) continue; // No overlay data yet
-
             const geometry = f.geometry as GeoJSON.Point;
             if (geometry.type !== "Point") continue;
+
+            const overlay = intentOverlayRef.current.get(pid);
+
+            // If no overlay data yet, show grey pin (unclaimed default)
+            if (!overlay) {
+                features.push({
+                    type: "Feature",
+                    geometry,
+                    properties: {
+                        property_id: pid,
+                        color: "#9CA3AF",  // Muted grey fallback
+                        status: "unclaimed",
+                        pulse: false,
+                        glyph: ""
+                    },
+                });
+                continue;
+            }
 
             const status = resolveStatus({
                 is_claimed: overlay.is_claimed,
@@ -687,6 +948,10 @@ export default function PropertyMap() {
                     property_id: pid,
                     color: getPinColor(status),
                     status,
+                    // All active states pulse (STRICT EMBER RULE)
+                    pulse: status === "open_to_talking" || status === "for_sale" || status === "for_rent",
+                    // Glyphs: + (open_to_talking), £ (for_sale), r (for_rent)
+                    glyph: status === "open_to_talking" ? "+" : status === "for_sale" ? "£" : status === "for_rent" ? "r" : ""
                 },
             });
         }
@@ -701,7 +966,8 @@ export default function PropertyMap() {
         });
 
         return { type: "FeatureCollection", features: dedupedFeatures };
-    }, [intentOverlayVersion]);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [intentOverlayVersion, viewState, visiblePropertyIds]);
 
     // Toggle vibe bar expand and fetch live feed
     const handleToggleVibeBar = useCallback(() => {
@@ -776,7 +1042,23 @@ export default function PropertyMap() {
                     style={{ width: "100%", height: "100%" }}
                     mapStyle={MAP_STYLE}
                 >
-                    {/* Vector tile source for all properties (visible at high zoom) */}
+                    {/* Satellite layer with Glass filter - first child for proper z-ordering */}
+                    {viewMode === "satellite" && (
+                        <Source id="satellite-source" type="raster" tiles={[ARCGIS_SATELLITE_URL]} tileSize={256}>
+                            <Layer
+                                id="satellite-layer"
+                                type="raster"
+                                beforeId="water"
+                                paint={{
+                                    "raster-brightness-min": 0.1,
+                                    "raster-contrast": 0.2,
+                                    "raster-saturation": -0.6  // Glass filter: muted satellite
+                                }}
+                            />
+                        </Source>
+                    )}
+
+                    {/* Vector tile source with invisible Sensor layer for property detection */}
                     <Source
                         id="properties-vt"
                         type="vector"
@@ -784,21 +1066,15 @@ export default function PropertyMap() {
                         minzoom={0}
                         maxzoom={14}
                     >
+                        {/* Sensor layer - invisible but queryable for property ID detection */}
                         <Layer
                             id="property-points"
                             type="circle"
                             source-layer="properties"
                             minzoom={CLUSTER_MAX_ZOOM}
                             paint={{
-                                // Invisible base layer - intent overlay provides visible pins
-                                // Kept for queryable hit-testing
                                 "circle-color": "#000000",
-                                "circle-radius": [
-                                    "interpolate", ["linear"], ["zoom"],
-                                    12, 3,
-                                    14, 4,
-                                    16, 6
-                                ],
+                                "circle-radius": 6,
                                 "circle-opacity": 0,
                                 "circle-stroke-opacity": 0,
                             }}
@@ -827,10 +1103,11 @@ export default function PropertyMap() {
                                         16,
                                         10, 20,
                                         50, 24,
-                                        100, 28
+                                        100, 28,
+                                        500, 32
                                     ],
-                                    "circle-stroke-width": 2,
                                     "circle-stroke-color": "#fff",
+                                    "circle-stroke-width": 2,
                                     "circle-opacity": [
                                         "interpolate", ["linear"], ["zoom"],
                                         14.75, 1,
@@ -881,7 +1158,7 @@ export default function PropertyMap() {
                         </Source>
                     )}
 
-                    {/* Intent overlay - status-based colors on top of base pins */}
+                    {/* Intent overlay - THE authoritative pin layer with grey fallback */}
                     <Source
                         id="intent-overlay-source"
                         type="geojson"
@@ -891,25 +1168,72 @@ export default function PropertyMap() {
                             id="intent-overlay"
                             type="circle"
                             paint={{
-                                "circle-color": ["get", "color"],
+                                "circle-color": ["coalesce", ["get", "color"], "#9CA3AF"],
+                                "circle-radius": 4.5,
+                                "circle-stroke-width": 0.5,
+                                "circle-stroke-color": "#1B1B1B",
+                            }}
+                        />
+
+                        {/* Living Pin Pulse Layer */}
+                        <Layer
+                            id="pin-pulse"
+                            type="circle"
+                            filter={["==", ["get", "pulse"], true]}
+                            paint={{
+                                "circle-color": "#E08E5F",
                                 "circle-radius": [
                                     "interpolate", ["linear"], ["zoom"],
-                                    12, 3,
-                                    14, 4,
-                                    16, 6
+                                    12, ["*", 10, pulseRadius],
+                                    16, ["*", 25, pulseRadius]
                                 ],
-                                "circle-stroke-width": [
+                                "circle-opacity": ["*", 0.4, ["-", 1, pulseRadius]],
+                            }}
+                        />
+
+                        {/* Living Pin Glyphs */}
+                        <Layer
+                            id="pin-glyphs"
+                            type="symbol"
+                            filter={["!=", ["get", "glyph"], ""]}
+                            layout={{
+                                "text-field": ["get", "glyph"],
+                                "text-font": ["Open Sans Bold"],
+                                "text-size": [
                                     "interpolate", ["linear"], ["zoom"],
-                                    12, 1,
-                                    16, 1.5
+                                    14, 8,
+                                    16, 10
                                 ],
-                                "circle-stroke-color": "#fff",
+                                "text-allow-overlap": true,
+                                "text-ignore-placement": true,
+                            }}
+                            paint={{
+                                "text-color": "#fff",
                             }}
                         />
                     </Source>
 
 
                 </Map>
+
+                {/* Top Filter Bar */}
+                <div className="absolute top-4 left-1/2 -translate-x-1/2 flex items-center bg-[#F9F7F4]/90 backdrop-blur-md rounded-full px-1.5 py-1.5 shadow-lg border border-gray-200/50 z-10">
+                    <div className="flex items-center gap-1">
+                        <button className="px-4 py-1.5 rounded-full text-sm font-medium transition-all bg-ember text-white shadow-sm">
+                            All
+                        </button>
+                        <button className="px-4 py-1.5 rounded-full text-sm font-medium transition-all text-gray-600 hover:bg-gray-100">
+                            Open to Chat
+                        </button>
+                        <button className="px-4 py-1.5 rounded-full text-sm font-medium transition-all text-gray-600 hover:bg-gray-100">
+                            For Sale
+                        </button>
+                        <div className="w-px h-4 bg-gray-200 mx-1" />
+                        <button className="px-4 py-1.5 rounded-full text-sm font-medium transition-all text-gray-600 hover:bg-gray-100">
+                            Unclaimed
+                        </button>
+                    </div>
+                </div>
 
                 {/* Top-left controls */}
                 <div className="absolute top-4 left-4 flex flex-col gap-2">
@@ -921,13 +1245,44 @@ export default function PropertyMap() {
                             className="bg-white/90 backdrop-blur-sm rounded-lg p-2.5 shadow-md hover:bg-white transition-colors flex items-center gap-2"
                             aria-label="Messages"
                         >
-                            <svg className="w-5 h-5 text-teal-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <svg className="w-5 h-5 text-ember" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
                             </svg>
                             <span className="text-sm font-medium text-gray-700">Messages</span>
                         </button>
                     )}
 
+                    {/* Satellite Toggle (Deprecated by Mode Selector) */}
+                </div>
+
+                {/* Instrument Bar - Unified View Controls */}
+                <div className="absolute bottom-10 right-4 flex flex-col gap-1.5 z-10 bg-[#F9F7F4] border border-[#1B1B1B]/10 rounded-lg shadow-sm p-1.5">
+                    {/* Row 1: View Mode */}
+                    <div className="flex rounded-md overflow-hidden">
+                        {(["paper", "blueprint", "satellite"] as const).map((mode) => (
+                            <button
+                                key={mode}
+                                onClick={() => setViewMode(mode)}
+                                className={`px-3 py-1.5 text-xs font-medium capitalize transition-colors ${viewMode === mode
+                                    ? "bg-[#1B1B1B] text-white"
+                                    : "text-[#1B1B1B] hover:bg-gray-100"
+                                    } ${mode !== "satellite" ? "border-r border-[#1B1B1B]/10" : ""}`}
+                            >
+                                {mode}
+                            </button>
+                        ))}
+                    </div>
+
+                    {/* Row 2: Depth Toggle */}
+                    <button
+                        onClick={() => setIs3D(!is3D)}
+                        className={`w-full px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${is3D
+                            ? "bg-[#1B1B1B] text-white"
+                            : "text-[#1B1B1B] hover:bg-gray-100 border border-[#1B1B1B]/10"
+                            }`}
+                    >
+                        {is3D ? "3D Depth On" : "3D Depth Off"}
+                    </button>
                 </div>
 
                 {/* Property card sheet */}

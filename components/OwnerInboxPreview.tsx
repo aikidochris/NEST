@@ -106,7 +106,7 @@ export function OwnerInboxPreview({
                 </h4>
                 <button
                     onClick={onViewAll}
-                    className="text-xs text-teal-600 hover:text-teal-700 font-medium"
+                    className="text-xs text-ember hover:opacity-80 font-medium"
                 >
                     View all
                 </button>
@@ -121,8 +121,8 @@ export function OwnerInboxPreview({
                         className="w-full flex items-start gap-3 p-3 bg-gray-50 dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-xl text-left transition-colors"
                     >
                         {/* Avatar */}
-                        <div className="w-9 h-9 bg-teal-100 dark:bg-teal-900 rounded-full flex items-center justify-center flex-shrink-0">
-                            <svg className="w-4 h-4 text-teal-600 dark:text-teal-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <div className="w-9 h-9 bg-ember/20 dark:bg-ember/30 rounded-full flex items-center justify-center flex-shrink-0">
+                            <svg className="w-4 h-4 text-ember" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
                             </svg>
                         </div>

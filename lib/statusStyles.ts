@@ -16,18 +16,21 @@ import type { Status } from "./status";
 
 /**
  * Map status to pin color (hex).
- * Unclaimed = light grey (calm, low priority)
- * Intent states = distinctive colors
+ * 
+ * STRICT EMBER RULE:
+ * - Active states (for_rent, for_sale, open_to_talking) = EMBER (#E08E5F)
+ * - Unclaimed = Muted Grey (#9CA3AF)
+ * - Structural states (claimed, settled) = Grey variants
  */
 export const PIN_COLORS: Record<Status, string> = {
-    unclaimed: "#D1D5DB",       // Light grey - calm, structural
-    claimed: "#9CA3AF",         // Medium grey - deprecated
-    owner_no_status: "#9CA3AF", // Medium grey - claimed with no intent
-    open_to_talking: "#007C7C", // Teal - friendly, approachable
-    settled: "#8C8C8C",         // Dark grey - not moving
-    for_sale: "#E65F52",        // Coral - attention, action
-    for_rent: "#4F46E5",        // Indigo/violet - distinct from teal
-    unknown: "#E5E7EB",         // Very light grey - debug only
+    unclaimed: "#9CA3AF",       // Muted Grey - calm, structural
+    claimed: "#6B7280",         // Medium grey - deprecated
+    owner_no_status: "#6B7280", // Medium grey - claimed with no intent
+    open_to_talking: "#E08E5F", // EMBER - friendly, approachable
+    settled: "#6B7280",         // Medium grey - not moving
+    for_sale: "#E08E5F",        // EMBER - attention, action
+    for_rent: "#E08E5F",        // EMBER - attention, action (was Indigo)
+    unknown: "#D1D5DB",         // Light grey - debug only
 };
 
 // =============================================================================
@@ -79,9 +82,9 @@ export const CHIP_STYLES: Record<Status, ChipStyle> = {
     unclaimed: { bg: "bg-gray-100", text: "text-gray-500" },
     claimed: { bg: "bg-gray-100", text: "text-gray-600" },  // Deprecated
     owner_no_status: { bg: "bg-gray-100", text: "text-gray-600" },
-    open_to_talking: { bg: "bg-teal-100", text: "text-teal-800" },
+    open_to_talking: { bg: "bg-orange-50", text: "text-orange-900" }, // Using orange as proxy for Ember in Tailwind
     settled: { bg: "bg-gray-200", text: "text-gray-700" },
-    for_sale: { bg: "bg-red-100", text: "text-red-800" },
+    for_sale: { bg: "bg-orange-100", text: "text-orange-900" },
     for_rent: { bg: "bg-indigo-100", text: "text-indigo-800" },
     unknown: { bg: "bg-gray-100", text: "text-gray-400" },
 };
