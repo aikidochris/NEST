@@ -27,6 +27,14 @@ const VIEW_COLUMNS = [
     "claimed_by_user_id",
 ].join(",");
 
+/** Lightweight columns for cluster display only */
+const CLUSTER_COLUMNS = [
+    "property_id",
+    "lat",
+    "lon",
+    "is_claimed",
+].join(",");
+
 /**
  * Returns adaptive limit based on zoom level.
  */
@@ -206,10 +214,14 @@ export async function GET(request: NextRequest): Promise<Response> {
         const zoom = zoomParam ? Math.round(parseFloat(zoomParam)) : 14;
         const limit = getAdaptiveLimit(zoom);
 
-        // Query properties
+        // Use lightweight columns for cluster display (zoom <= 15)
+        const isClusterMode = zoom <= 15;
+        const columns = isClusterMode ? CLUSTER_COLUMNS : VIEW_COLUMNS;
+
+        // Query properties with zoom-appropriate columns
         const { data, error } = await supabase
             .from("property_public_view")
-            .select(VIEW_COLUMNS)
+            .select(columns)
             .gte("lon", minLon)
             .lte("lon", maxLon)
             .gte("lat", minLat)
@@ -221,15 +233,37 @@ export async function GET(request: NextRequest): Promise<Response> {
             return jsonErr(error.message, 500, "SUPABASE_ERROR");
         }
 
-        // Map to include is_mine and remove claimed_by_user_id from response
+        // For cluster mode, return minimal data directly
+        if (isClusterMode) {
+            type ClusterRow = { property_id: string; lat: number; lon: number; is_claimed: boolean };
+            const clusterData = ((data || []) as unknown as ClusterRow[]).map((p) => ({
+                property_id: p.property_id,
+                lat: p.lat,
+                lon: p.lon,
+                is_claimed: p.is_claimed,
+            }));
+
+            // Downsample at low zoom
+            const downsampled = downsampleByGrid(clusterData, zoom);
+
+            return NextResponse.json(
+                { ok: true, data: downsampled },
+                {
+                    status: 200,
+                    headers: {
+                        // Cluster data can be cached publicly for longer
+                        "Cache-Control": "public, max-age=60",
+                    },
+                }
+            );
+        }
+
+        // Full property data for high zoom
         const rawProperties = (data || []) as unknown as RawProperty[];
         const propertiesWithMine = rawProperties.map((p) => mapProperty(p, userId));
 
-        // Downsample at low zoom
-        const downsampled = downsampleByGrid(propertiesWithMine, zoom);
-
         return NextResponse.json(
-            { ok: true, data: downsampled },
+            { ok: true, data: propertiesWithMine },
             {
                 status: 200,
                 headers: {

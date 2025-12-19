@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef, useEffect, useMemo } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import Map, { Source, Layer, ViewStateChangeEvent, MapRef } from "react-map-gl/maplibre";
 import type { MapLayerMouseEvent, GeoJSONSource } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
@@ -10,8 +10,7 @@ import { PropertyCardSheet } from "@/components/PropertyCardSheet";
 import { AreaVibeBar, type VibeStats, type LiveFeedEvent } from "@/components/AreaVibeBar";
 import { GlobalInboxOverlay } from "@/components/GlobalInboxOverlay";
 import { useAuth } from "@/app/AuthProvider";
-import { inspectLog, resolveStatus, type Status } from "@/lib/inspect";
-import { getPinColor } from "@/lib/statusStyles";
+import { inspectLog, resolveStatus } from "@/lib/inspect";
 import { MapIntentProvider, type FlyToOptions, type OpenPropertyOptions } from "@/contexts/MapIntentContext";
 
 // =============================================================================
@@ -21,6 +20,11 @@ const CLUSTER_COLOR = "#64748b";        // Muted Nest blue/slate
 const CLUSTER_TEXT_COLOR = "#ffffff";   // White numeric label
 const CLUSTER_RADIUS = 40;              // Cluster radius in pixels
 const CLUSTER_MAX_ZOOM = 15;            // Clusters disappear at zoom > 15
+
+// Hearth Design System Colors
+const EMBER = "#E08E5F";                // Active states: for_sale, for_rent, open_to_talking
+const PAPER_GREY = "#9CA3AF";           // Unclaimed properties
+const OWNER_GREY = "#6B7280";           // Claimed with no active intent (settled, owner_no_status)
 
 // =============================================================================
 // MAP CONFIGURATION
@@ -32,8 +36,8 @@ const DEFAULT_VIEW = {
     latitude: 55.05,
     zoom: 12,
 };
-const DEBOUNCE_MS = 300;
-const INTENT_OVERLAY_DEBOUNCE_MS = 400;
+const DEBOUNCE_MS = 0;                  // 0ms for initial load (instant clusters)
+// Intent flags now come directly from MVT tiles - no overlay API needed
 
 // Empty GeoJSON for initial state
 const EMPTY_GEOJSON: GeoJSON.FeatureCollection = {
@@ -68,17 +72,7 @@ function bboxToGridKey(bbox: BBox): string {
     ].join(",");
 }
 
-/**
- * Intent overlay data for a single property.
- */
-interface IntentOverlayData {
-    property_id: string;
-    is_claimed: boolean | null;
-    soft_listing: boolean | null;
-    settled: boolean | null;
-    is_for_sale: boolean | null;
-    is_for_rent: boolean | null;
-}
+// Intent flags are now delivered via MVT tiles (is_open_to_talking, is_for_sale, is_for_rent, is_settled)
 
 /**
  * Clean Lens: Hide commercial POIs (Retail, Petrol, Coffee).
@@ -158,9 +152,7 @@ export default function PropertyMap() {
     const clusterAbortRef = useRef<AbortController | null>(null);
     const vibeAbortRef = useRef<AbortController | null>(null);
     const liveFeedAbortRef = useRef<AbortController | null>(null);
-    const intentOverlayAbortRef = useRef<AbortController | null>(null);
     const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
-    const intentOverlayDebounceRef = useRef<NodeJS.Timeout | null>(null);
 
     // Cache for vibe stats by grid key
     const vibeCacheRef = useRef<globalThis.Map<string, VibeStats>>(new globalThis.Map());
@@ -168,10 +160,7 @@ export default function PropertyMap() {
     // Store current bbox for live feed fetch
     const currentBboxRef = useRef<BBox | null>(null);
 
-    // Intent overlay: visible property IDs and their intent flags
-    const [visiblePropertyIds, setVisiblePropertyIds] = useState<string[]>([]);
-    const intentOverlayRef = useRef<globalThis.Map<string, IntentOverlayData>>(new globalThis.Map());
-    const [intentOverlayVersion, setIntentOverlayVersion] = useState(0);
+    // Pulse animation radius for Living Pins
     const [pulseRadius, setPulseRadius] = useState(0);
 
     // Fetch cluster data (GeoJSON for clustering at low zoom)
@@ -333,82 +322,6 @@ export default function PropertyMap() {
         }
     }, []);
 
-    // Fetch intent overlay for visible property IDs
-    const fetchIntentOverlay = useCallback(async (ids: string[]) => {
-        if (ids.length === 0) return;
-
-        if (intentOverlayAbortRef.current) {
-            intentOverlayAbortRef.current.abort();
-        }
-
-        const controller = new AbortController();
-        intentOverlayAbortRef.current = controller;
-
-        try {
-            const response = await fetch("/api/intent-overlay", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ ids }),
-                signal: controller.signal,
-            });
-
-            if (!response.ok) return;
-
-            const json = await response.json();
-            if (json.ok && json.data) {
-                // Update overlay map
-                const newOverlay = intentOverlayRef.current;
-                for (const item of json.data as IntentOverlayData[]) {
-                    newOverlay.set(item.property_id, item);
-                }
-                // Keep cache size reasonable (max 2000 entries)
-                if (newOverlay.size > 2000) {
-                    const keysToDelete = [...newOverlay.keys()].slice(0, newOverlay.size - 2000);
-                    for (const key of keysToDelete) {
-                        newOverlay.delete(key);
-                    }
-                }
-                // Trigger re-render
-                setIntentOverlayVersion((v) => v + 1);
-
-                // Inspection logging
-                inspectLog("INTENT_OVERLAY_FETCH", { count: ids.length });
-            }
-        } catch (err) {
-            if (err instanceof Error && err.name === "AbortError") return;
-            // Silently fail - overlay is optional enhancement
-        }
-    }, []);
-
-    // Capture visible property IDs from rendered features (non-clustered only)
-    const captureVisiblePropertyIds = useCallback(() => {
-        const map = mapRef.current?.getMap();
-        if (!map) return;
-
-        const ids = new Set<string>();
-
-        // Query all property layers at once using safe query
-        const features = safeQueryRenderedFeatures(map, QUERYABLE_POINT_LAYERS);
-        for (const f of features) {
-            const pid = f.properties?.property_id;
-            if (typeof pid === "string" && pid.length > 0) {
-                ids.add(pid);
-            }
-        }
-
-        const idsArray = [...ids];
-
-        // Only update if set actually changed
-        setVisiblePropertyIds((prev) => {
-            if (prev.length === idsArray.length && prev.every((id, i) => id === idsArray[i])) {
-                return prev;
-            }
-            return idsArray;
-        });
-
-        // Force overlay recalculation by bumping version
-        setIntentOverlayVersion((v) => v + 1);
-    }, []);
 
     // Initial fetch on map load + set up cursor handlers
     const handleLoad = useCallback(
@@ -423,7 +336,7 @@ export default function PropertyMap() {
             }
 
             // Pointer cursor on interactive layers
-            const interactiveLayers = ["property-points", "clusters", "intent-overlay"];
+            const interactiveLayers = ["property-points", "clusters", "hearth-pins"];
             interactiveLayers.forEach((layer) => {
                 map.on("mouseenter", layer, () => {
                     map.getCanvas().style.cursor = "pointer";
@@ -442,7 +355,7 @@ export default function PropertyMap() {
                 if (hasLoggedLayers) return;
                 hasLoggedLayers = true;
 
-                const layersToCheck = [...QUERYABLE_POINT_LAYERS, "clusters", "intent-overlay"];
+                const layersToCheck = [...QUERYABLE_POINT_LAYERS, "clusters", "hearth-pins", "hearth-glyphs"];
                 const layerStatus = layersToCheck.map(id => {
                     try {
                         return { id, exists: !!map.getLayer(id) };
@@ -453,18 +366,12 @@ export default function PropertyMap() {
                 inspectLog("MAP_LAYERS_CHECK", { queried_layers: layerStatus });
             };
 
-            // Capture visible IDs on map idle (after render complete)
+            // Log layers on first idle
             map.on("idle", () => {
                 logLayersOnce();
-                captureVisiblePropertyIds();
             });
-
-            // Multiple delayed captures to ensure we catch tile loads at different timings
-            setTimeout(() => captureVisiblePropertyIds(), 300);
-            setTimeout(() => captureVisiblePropertyIds(), 800);
-            setTimeout(() => captureVisiblePropertyIds(), 1500);
         },
-        [fetchClusterData, fetchVibeStats, captureVisiblePropertyIds]
+        [fetchClusterData, fetchVibeStats]
     );
 
     // Ensure pin layers persist and stay on top (simplified - only handles vector source)
@@ -504,7 +411,7 @@ export default function PropertyMap() {
         }
 
         // Move pin layers to very top
-        ["pin-pulse", "intent-overlay", "pin-glyphs"].forEach(id => {
+        ["hearth-pins", "hearth-pulse", "hearth-glyphs"].forEach(id => {
             if (map.getLayer(id)) {
                 try { map.moveLayer(id); } catch { /* ignore */ }
             }
@@ -518,6 +425,8 @@ export default function PropertyMap() {
         if (!map) return;
 
         // Add 3D building extrusion layer (6.5m height, static opacity)
+        // Note: Building basemap data doesn't contain property_id, so we use consistent styling
+        // The Hearth pin layers provide the active status indication on top
         const add3DBuildings = () => {
             if (!is3D) return;  // Skip if 2D mode
             if (map.getLayer("building-3d")) return;
@@ -529,14 +438,6 @@ export default function PropertyMap() {
 
             if (existingBuilding && 'source' in existingBuilding) {
                 try {
-                    // Collect active property IDs for Hearth Glow
-                    const activeIds: string[] = [];
-                    intentOverlayRef.current.forEach((data, pid) => {
-                        if (data.soft_listing || data.is_for_sale || data.is_for_rent) {
-                            activeIds.push(pid);
-                        }
-                    });
-
                     map.addLayer({
                         id: "building-3d",
                         source: existingBuilding.source as string,
@@ -544,13 +445,8 @@ export default function PropertyMap() {
                         type: "fill-extrusion",
                         minzoom: 14,
                         paint: {
-                            // Hearth 3D Glow: Ember for active, Ghost White for others
-                            "fill-extrusion-color": activeIds.length > 0 ? [
-                                "case",
-                                ["in", ["get", "property_id"], ["literal", activeIds]],
-                                "#E08E5F",
-                                "#FFFFFF"
-                            ] : "#FFFFFF",
+                            // Cinematic 3D: Warm white buildings with subtle ember tint
+                            "fill-extrusion-color": "#FFFAF5",
                             "fill-extrusion-height": 6.5,
                             "fill-extrusion-base": 0,
                             "fill-extrusion-opacity": 0.6
@@ -586,8 +482,8 @@ export default function PropertyMap() {
                 try { map.moveLayer("building-3d"); } catch { /* ignore */ }
             }
 
-            // 3. Pins on very top
-            ["property-points", "pin-pulse", "intent-overlay", "pin-glyphs"].forEach(id => {
+            // 3. Hearth pin layers on very top (in order: pins, pulse, glyphs)
+            ["hearth-pins", "hearth-pulse", "hearth-glyphs", "property-points"].forEach(id => {
                 if (map.getLayer(id)) {
                     try { map.moveLayer(id); } catch { /* ignore */ }
                 }
@@ -621,23 +517,10 @@ export default function PropertyMap() {
 
             // Ensure pin layers exist
             ensurePinLayers();
-
-            // Capture visible IDs immediately to trigger intent fetch
-            setTimeout(() => captureVisiblePropertyIds(), 100);
-        };
-
-        // Handler for sourcedata event to capture visible IDs when tiles load
-        const handleSourceData = (e: maplibregl.MapSourceDataEvent) => {
-            if (e.sourceId === "properties-vt" && e.isSourceLoaded) {
-                captureVisiblePropertyIds();
-            }
         };
 
         // Listen for style.load to re-add our custom layers after style changes
         map.on("style.load", handleStyleUpdate);
-
-        // Listen for sourcedata to capture visible IDs when tiles load
-        map.on("sourcedata", handleSourceData);
 
         // Initial update if style is already loaded
         if (map.isStyleLoaded()) {
@@ -648,9 +531,8 @@ export default function PropertyMap() {
 
         return () => {
             map.off("style.load", handleStyleUpdate);
-            map.off("sourcedata", handleSourceData);
         };
-    }, [viewMode, is3D, ensurePinLayers, captureVisiblePropertyIds]);
+    }, [viewMode, is3D, ensurePinLayers]);
 
     // Handle map click - cluster zoom or property select
     const handleMapClick = useCallback(
@@ -693,44 +575,25 @@ export default function PropertyMap() {
                 return; // Don't open sheet for cluster click
             }
 
-            // Individual property click
-            const overlayFeature = features.find((f) => f.layer?.id === "intent-overlay");
+            // Individual property click - use feature properties directly from tiles
+            const hearthFeature = features.find((f) => f.layer?.id === "hearth-pins");
             const baseFeature = features.find((f) => f.layer?.id === "property-points");
             const unclusteredFeature = features.find((f) => f.layer?.id === "unclustered-point");
 
-            const feature = overlayFeature || baseFeature || unclusteredFeature;
+            const feature = hearthFeature || baseFeature || unclusteredFeature;
             if (!feature) return;
 
             const propertyId = feature.properties?.property_id;
             if (propertyId) {
-                // Build intent flags from feature properties (may be null if not available)
+                // Build intent flags from feature properties (tiles now include all flags)
                 const props = feature.properties ?? {};
                 const source_layer = feature.layer?.id;
 
-                // Check if we have overlay data for more accurate status
-                const overlay = intentOverlayRef.current.get(propertyId);
-
-                // Determine is_claimed: overlay takes priority
-                const raw_is_claimed = props.is_claimed;
-                let is_claimed: boolean | null;
-                if (overlay) {
-                    is_claimed = overlay.is_claimed;
-                } else if (typeof raw_is_claimed === "boolean") {
-                    is_claimed = raw_is_claimed;
-                } else {
-                    // Unknown - leave as null for debug visibility
-                    is_claimed = null;
-                }
-
-                // Use overlay data if available, otherwise fall back to feature properties
-                const intent_flags = overlay ? {
-                    soft_listing: overlay.soft_listing,
-                    settled: overlay.settled,
-                    is_for_sale: overlay.is_for_sale,
-                    is_for_rent: overlay.is_for_rent,
-                } : {
-                    soft_listing: props.soft_listing ?? props.is_open_to_talking ?? null,
-                    settled: props.settled ?? props.is_settled ?? null,
+                // Read directly from tile properties
+                const is_claimed = typeof props.is_claimed === "boolean" ? props.is_claimed : null;
+                const intent_flags = {
+                    soft_listing: props.is_open_to_talking ?? null,
+                    settled: props.is_settled ?? null,
                     is_for_sale: props.is_for_sale ?? null,
                     is_for_rent: props.is_for_rent ?? null,
                 };
@@ -738,11 +601,9 @@ export default function PropertyMap() {
                 // Inspection mode logging for property click
                 inspectLog("PROPERTY_OPEN", {
                     property_id: propertyId,
-                    raw_is_claimed,
                     is_claimed,
                     display_label: props.display_label ?? null,
                     source_layer,
-                    has_overlay: !!overlay,
                     intent_flags,
                     resolved_status: resolveStatus({
                         is_claimed,
@@ -770,18 +631,16 @@ export default function PropertyMap() {
         setPendingConversationId(null);
     }, []);
 
-    // Refresh intent overlay for a specific property or all visible
-    const refreshIntentForProperty = useCallback((propertyId?: string) => {
-        if (propertyId) {
-            // Fetch intent for specific property and update cache
-            fetchIntentOverlay([propertyId]);
-        } else {
-            // Refresh all visible properties
-            captureVisiblePropertyIds();
+    // Refresh intent: tiles are now the source of truth, so we just need to force a repaint
+    const refreshIntentForProperty = useCallback((_propertyId?: string) => {
+        // With MVT tiles as single source of truth, intent updates come from tile refresh
+        // Force map repaint by triggering a state change
+        const map = mapRef.current?.getMap();
+        if (map) {
+            // Trigger repaint on the vector source
+            map.triggerRepaint();
         }
-        // Bump version to trigger overlay re-render
-        setIntentOverlayVersion((v) => v + 1);
-    }, [fetchIntentOverlay, captureVisiblePropertyIds]);
+    }, []);
 
     // After claim success, refresh intent
     const handleClaimSuccess = useCallback(() => {
@@ -840,12 +699,8 @@ export default function PropertyMap() {
             clusterAbortRef.current?.abort();
             vibeAbortRef.current?.abort();
             liveFeedAbortRef.current?.abort();
-            intentOverlayAbortRef.current?.abort();
             if (debounceTimerRef.current) {
                 clearTimeout(debounceTimerRef.current);
-            }
-            if (intentOverlayDebounceRef.current) {
-                clearTimeout(intentOverlayDebounceRef.current);
             }
         };
     }, []);
@@ -871,103 +726,6 @@ export default function PropertyMap() {
         return () => cancelAnimationFrame(animationFrame);
     }, []);
 
-    // Debounced effect to fetch intent overlay when visible IDs change
-    useEffect(() => {
-        if (visiblePropertyIds.length === 0) return;
-
-        // Filter out IDs we already have in cache
-        const uncachedIds = visiblePropertyIds.filter((id) => !intentOverlayRef.current.has(id));
-        if (uncachedIds.length === 0) return;
-
-        // Debounce the fetch
-        if (intentOverlayDebounceRef.current) {
-            clearTimeout(intentOverlayDebounceRef.current);
-        }
-
-        intentOverlayDebounceRef.current = setTimeout(() => {
-            fetchIntentOverlay(uncachedIds);
-        }, INTENT_OVERLAY_DEBOUNCE_MS);
-
-        return () => {
-            if (intentOverlayDebounceRef.current) {
-                clearTimeout(intentOverlayDebounceRef.current);
-            }
-        };
-    }, [visiblePropertyIds, fetchIntentOverlay]);
-
-    // Compute overlay GeoJSON with status-based colors
-    const overlayGeoJSON = useMemo((): GeoJSON.FeatureCollection => {
-        // Use intentOverlayVersion to trigger recalculation
-        void intentOverlayVersion;
-
-        const features: GeoJSON.Feature[] = [];
-        const map = mapRef.current?.getMap();
-        if (!map) return { type: "FeatureCollection", features };
-
-        // Get all non-clustered features from property layers using safe query
-        const renderedFeatures = safeQueryRenderedFeatures(map, QUERYABLE_POINT_LAYERS);
-        for (const f of renderedFeatures) {
-            const pid = f.properties?.property_id;
-            if (typeof pid !== "string" || pid.length === 0) continue;
-
-            const geometry = f.geometry as GeoJSON.Point;
-            if (geometry.type !== "Point") continue;
-
-            const overlay = intentOverlayRef.current.get(pid);
-
-            // If no overlay data yet, show grey pin (unclaimed default)
-            if (!overlay) {
-                features.push({
-                    type: "Feature",
-                    geometry,
-                    properties: {
-                        property_id: pid,
-                        color: "#9CA3AF",  // Muted grey fallback
-                        status: "unclaimed",
-                        pulse: false,
-                        glyph: ""
-                    },
-                });
-                continue;
-            }
-
-            const status = resolveStatus({
-                is_claimed: overlay.is_claimed,
-                intent_flags: {
-                    soft_listing: overlay.soft_listing,
-                    settled: overlay.settled,
-                    is_for_sale: overlay.is_for_sale,
-                    is_for_rent: overlay.is_for_rent,
-                },
-            });
-
-            features.push({
-                type: "Feature",
-                geometry,
-                properties: {
-                    property_id: pid,
-                    color: getPinColor(status),
-                    status,
-                    // All active states pulse (STRICT EMBER RULE)
-                    pulse: status === "open_to_talking" || status === "for_sale" || status === "for_rent",
-                    // Glyphs: + (open_to_talking), £ (for_sale), r (for_rent)
-                    glyph: status === "open_to_talking" ? "+" : status === "for_sale" ? "£" : status === "for_rent" ? "r" : ""
-                },
-            });
-        }
-
-        // Dedupe by property_id (keep first occurrence)
-        const seen = new Set<string>();
-        const dedupedFeatures = features.filter((f) => {
-            const pid = f.properties?.property_id;
-            if (seen.has(pid)) return false;
-            seen.add(pid);
-            return true;
-        });
-
-        return { type: "FeatureCollection", features: dedupedFeatures };
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [intentOverlayVersion, viewState, visiblePropertyIds]);
 
     // Toggle vibe bar expand and fetch live feed
     const handleToggleVibeBar = useCallback(() => {
@@ -1000,21 +758,6 @@ export default function PropertyMap() {
         if (clusterSource) clusterSource.setData(clusterData);
     }, [clusterData]);
 
-    // Update intent overlay source when overlayGeoJSON changes (explicit setData for MapLibre repaint)
-    useEffect(() => {
-        const map = mapRef.current?.getMap();
-        if (!map) return;
-
-        const intentSource = map.getSource("intent-overlay-source") as GeoJSONSource | undefined;
-        if (intentSource) {
-            intentSource.setData(overlayGeoJSON);
-            // Ensure overlay layer is on top
-            if (map.getLayer("intent-overlay")) {
-                map.moveLayer("intent-overlay");
-            }
-        }
-    }, [overlayGeoJSON]);
-
     // Show clusters layer only at low zoom
     const showClusters = viewState.zoom <= CLUSTER_MAX_ZOOM;
 
@@ -1038,7 +781,7 @@ export default function PropertyMap() {
                     onMoveEnd={handleMoveEnd}
                     onLoad={handleLoad}
                     onClick={handleMapClick}
-                    interactiveLayerIds={["property-points", "clusters", "unclustered-point", "intent-overlay"]}
+                    interactiveLayerIds={["property-points", "clusters", "unclustered-point", "hearth-pins"]}
                     style={{ width: "100%", height: "100%" }}
                     mapStyle={MAP_STYLE}
                 >
@@ -1058,7 +801,8 @@ export default function PropertyMap() {
                         </Source>
                     )}
 
-                    {/* Vector tile source with invisible Sensor layer for property detection */}
+
+                    {/* Vector tile source with GPU-native Hearth pin layers */}
                     <Source
                         id="properties-vt"
                         type="vector"
@@ -1066,7 +810,88 @@ export default function PropertyMap() {
                         minzoom={0}
                         maxzoom={14}
                     >
-                        {/* Sensor layer - invisible but queryable for property ID detection */}
+                        {/* Base Pin Layer - GPU expression for instant status colors */}
+                        <Layer
+                            id="hearth-pins"
+                            type="circle"
+                            source-layer="properties"
+                            minzoom={CLUSTER_MAX_ZOOM}
+                            paint={{
+                                // Hearth color expression: EMBER for active, GREY for others
+                                // Priority: for_sale > for_rent > open_to_talking > settled > claimed > unclaimed
+                                "circle-color": [
+                                    "case",
+                                    ["==", ["get", "is_for_sale"], true], EMBER,
+                                    ["==", ["get", "is_for_rent"], true], EMBER,
+                                    ["==", ["get", "is_open_to_talking"], true], EMBER,
+                                    ["==", ["get", "is_settled"], true], OWNER_GREY,
+                                    ["==", ["get", "is_claimed"], true], OWNER_GREY,
+                                    PAPER_GREY  // default: unclaimed
+                                ],
+                                "circle-radius": 5,
+                                "circle-stroke-width": 0.5,
+                                "circle-stroke-color": "#1B1B1B",
+                            }}
+                        />
+
+                        {/* Living Pin Pulse Layer - Ember glow for active properties */}
+                        <Layer
+                            id="hearth-pulse"
+                            type="circle"
+                            source-layer="properties"
+                            minzoom={CLUSTER_MAX_ZOOM}
+                            filter={[
+                                "any",
+                                ["==", ["get", "is_for_sale"], true],
+                                ["==", ["get", "is_for_rent"], true],
+                                ["==", ["get", "is_open_to_talking"], true]
+                            ]}
+                            paint={{
+                                "circle-color": EMBER,
+                                "circle-radius": [
+                                    "interpolate", ["linear"], ["zoom"],
+                                    12, ["*", 12, pulseRadius],
+                                    16, ["*", 28, pulseRadius]
+                                ],
+                                "circle-opacity": ["*", 0.35, ["-", 1, pulseRadius]],
+                            }}
+                        />
+
+                        {/* Hearth Glyphs - GPU-native status symbols */}
+                        <Layer
+                            id="hearth-glyphs"
+                            type="symbol"
+                            source-layer="properties"
+                            minzoom={CLUSTER_MAX_ZOOM}
+                            filter={[
+                                "any",
+                                ["==", ["get", "is_for_sale"], true],
+                                ["==", ["get", "is_for_rent"], true],
+                                ["==", ["get", "is_open_to_talking"], true]
+                            ]}
+                            layout={{
+                                "text-field": [
+                                    "case",
+                                    ["==", ["get", "is_for_sale"], true], "£",
+                                    ["==", ["get", "is_for_rent"], true], "r",
+                                    ["==", ["get", "is_open_to_talking"], true], "+",
+                                    ""
+                                ],
+                                "text-font": ["Open Sans Bold"],
+                                "text-size": [
+                                    "interpolate", ["linear"], ["zoom"],
+                                    14, 9,
+                                    16, 11
+                                ],
+                                "text-allow-overlap": true,
+                                "text-ignore-placement": true,
+                            }}
+                            paint={{
+                                "text-color": "#ffffff",
+                            }}
+                        />
+
+                        {/* Hidden sensor layer - for queryable property clicks */}
                         <Layer
                             id="property-points"
                             type="circle"
@@ -1074,7 +899,7 @@ export default function PropertyMap() {
                             minzoom={CLUSTER_MAX_ZOOM}
                             paint={{
                                 "circle-color": "#000000",
-                                "circle-radius": 6,
+                                "circle-radius": 8,
                                 "circle-opacity": 0,
                                 "circle-stroke-opacity": 0,
                             }}
@@ -1157,62 +982,6 @@ export default function PropertyMap() {
                             />
                         </Source>
                     )}
-
-                    {/* Intent overlay - THE authoritative pin layer with grey fallback */}
-                    <Source
-                        id="intent-overlay-source"
-                        type="geojson"
-                        data={overlayGeoJSON}
-                    >
-                        <Layer
-                            id="intent-overlay"
-                            type="circle"
-                            paint={{
-                                "circle-color": ["coalesce", ["get", "color"], "#9CA3AF"],
-                                "circle-radius": 4.5,
-                                "circle-stroke-width": 0.5,
-                                "circle-stroke-color": "#1B1B1B",
-                            }}
-                        />
-
-                        {/* Living Pin Pulse Layer */}
-                        <Layer
-                            id="pin-pulse"
-                            type="circle"
-                            filter={["==", ["get", "pulse"], true]}
-                            paint={{
-                                "circle-color": "#E08E5F",
-                                "circle-radius": [
-                                    "interpolate", ["linear"], ["zoom"],
-                                    12, ["*", 10, pulseRadius],
-                                    16, ["*", 25, pulseRadius]
-                                ],
-                                "circle-opacity": ["*", 0.4, ["-", 1, pulseRadius]],
-                            }}
-                        />
-
-                        {/* Living Pin Glyphs */}
-                        <Layer
-                            id="pin-glyphs"
-                            type="symbol"
-                            filter={["!=", ["get", "glyph"], ""]}
-                            layout={{
-                                "text-field": ["get", "glyph"],
-                                "text-font": ["Open Sans Bold"],
-                                "text-size": [
-                                    "interpolate", ["linear"], ["zoom"],
-                                    14, 8,
-                                    16, 10
-                                ],
-                                "text-allow-overlap": true,
-                                "text-ignore-placement": true,
-                            }}
-                            paint={{
-                                "text-color": "#fff",
-                            }}
-                        />
-                    </Source>
-
 
                 </Map>
 
