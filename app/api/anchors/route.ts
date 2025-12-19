@@ -60,22 +60,28 @@ export async function GET(request: Request) {
     }
 
     // Convert to GeoJSON FeatureCollection
-    const features: GeoJSON.Feature[] = ((data || []) as AnchorRow[]).map((anchor) => ({
-        type: "Feature" as const,
-        id: anchor.id,
-        geometry: {
-            type: "Point" as const,
-            coordinates: [anchor.longitude, anchor.latitude]
-        },
-        properties: {
+    const features: GeoJSON.Feature[] = ((data || []) as AnchorRow[]).map((anchor) => {
+        // Extract tier from metadata, default to 'foundational'
+        const tier = (anchor.metadata?.tier as string) || 'foundational';
+
+        return {
+            type: "Feature" as const,
             id: anchor.id,
-            name: anchor.name,
-            anchor_type: anchor.anchor_type,
-            subtype: anchor.subtype,
-            postcode: anchor.postcode,
-            metadata: JSON.stringify(anchor.metadata || {})
-        }
-    }));
+            geometry: {
+                type: "Point" as const,
+                coordinates: [anchor.longitude, anchor.latitude]
+            },
+            properties: {
+                id: anchor.id,
+                name: anchor.name,
+                anchor_type: anchor.anchor_type,
+                subtype: anchor.subtype,
+                postcode: anchor.postcode,
+                tier,  // Direct tier property for efficient filtering
+                metadata: JSON.stringify(anchor.metadata || {})
+            }
+        };
+    });
 
     const geojson: GeoJSON.FeatureCollection = {
         type: "FeatureCollection",

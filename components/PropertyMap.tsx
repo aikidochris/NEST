@@ -26,7 +26,7 @@ const CLUSTER_MAX_ZOOM = 15;            // Clusters disappear at zoom > 15
 // Hearth Design System Colors
 const EMBER = "#E08E5F";                // Active states: for_sale, for_rent, open_to_talking
 const PAPER = "#F9F7F4";                // Background/horizon color
-const PAPER_GREY = "#9CA3AF";           // Unclaimed properties
+const PAPER_GREY = "#D1D5DB";           // Unclaimed properties (lighter to recede)
 const OWNER_GREY = "#6B7280";           // Claimed with no active intent (settled, owner_no_status)
 const BUILDING_WARM = "#F1EFE9";        // 3D building extrusion (tone-on-tone editorial)
 const INK_GREY = "#8C8C8C";             // Anchor icons base color
@@ -181,6 +181,9 @@ export default function PropertyMap() {
     const [activeAnchorId, setActiveAnchorId] = useState<string | null>(null);
     const [lockedAnchorIds, setLockedAnchorIds] = useState<string[]>([]);  // Array for toggle logic
     const [selectedAnchor, setSelectedAnchor] = useState<GeoJSON.Feature<GeoJSON.Point, AnchorFeatureProperties> | null>(null);
+
+    // Tiered Anchor Filter: Foundational, Practical, Spirit
+    const [anchorTierFilter, setAnchorTierFilter] = useState<'all' | 'foundational' | 'practical' | 'spirit'>('all');
 
     // Fetch cluster data (GeoJSON for clustering at low zoom)
     const fetchClusterData = useCallback(async (bbox: BBox, zoom: number) => {
@@ -460,7 +463,11 @@ export default function PropertyMap() {
                 // Coastal: Minimalist wave
                 "hearth-coastal": `data:image/svg+xml;base64,${btoa(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="24" height="24"><path d="M21 17c-1.1 0-2-.9-2-2 0 1.1-.9 2-2 2s-2-.9-2-2c0 1.1-.9 2-2 2s-2-.9-2-2c0 1.1-.9 2-2 2s-2-.9-2-2c0 1.1-.9 2-2 2v2c1.1 0 2-.9 2-2 0 1.1.9 2 2 2s2-.9 2-2c0 1.1.9 2 2 2s2-.9 2-2c0 1.1.9 2 2 2s2-.9 2-2c0 1.1.9 2 2 2v-2zm0-4c-1.1 0-2-.9-2-2 0 1.1-.9 2-2 2s-2-.9-2-2c0 1.1-.9 2-2 2s-2-.9-2-2c0 1.1-.9 2-2 2s-2-.9-2-2c0 1.1-.9 2-2 2v2c1.1 0 2-.9 2-2 0 1.1.9 2 2 2s2-.9 2-2c0 1.1.9 2 2 2s2-.9 2-2c0 1.1.9 2 2 2s2-.9 2-2c0 1.1.9 2 2 2v-2z"/></svg>`)}`,
                 // Village: Minimalist buildings
-                "hearth-village": `data:image/svg+xml;base64,${btoa(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="24" height="24"><path d="M15 11V5l-3-3-3 3v2H3v14h18V11h-6zm-8 8H5v-2h2v2zm0-4H5v-2h2v2zm0-4H5V9h2v2zm6 8h-2v-2h2v2zm0-4h-2v-2h2v2zm0-4h-2V9h2v2zm0-4h-2V5h2v2zm6 12h-2v-2h2v2zm0-4h-2v-2h2v2z"/></svg>`)}`
+                "hearth-village": `data:image/svg+xml;base64,${btoa(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="24" height="24"><path d="M15 11V5l-3-3-3 3v2H3v14h18V11h-6zm-8 8H5v-2h2v2zm0-4H5v-2h2v2zm0-4H5V9h2v2zm6 8h-2v-2h2v2zm0-4h-2v-2h2v2zm0-4h-2V9h2v2zm0-4h-2V5h2v2zm6 12h-2v-2h2v2zm0-4h-2v-2h2v2z"/></svg>`)}`,
+                // Health: Medical plus/cross
+                "hearth-health": `data:image/svg+xml;base64,${btoa(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="24" height="24"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-2 10h-4v4h-2v-4H7v-2h4V7h2v4h4v2z"/></svg>`)}`,
+                // Shop: Shopping bag
+                "hearth-shop": `data:image/svg+xml;base64,${btoa(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="24" height="24"><path d="M18 6h-2c0-2.21-1.79-4-4-4S8 3.79 8 6H6c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm-6-2c1.1 0 2 .9 2 2h-4c0-1.1.9-2 2-2zm6 16H6V8h2v2c0 .55.45 1 1 1s1-.45 1-1V8h4v2c0 .55.45 1 1 1s1-.45 1-1V8h2v12z"/></svg>`)}`
             };
 
             // Load all icons into map sprite
@@ -1035,9 +1042,17 @@ export default function PropertyMap() {
                                     ["==", ["get", "is_claimed"], true], OWNER_GREY,
                                     PAPER_GREY  // default: unclaimed
                                 ],
-                                "circle-radius": 5,
-                                "circle-stroke-width": 0.5,
-                                "circle-stroke-color": "#1B1B1B",
+                                "circle-radius": 4,
+                                "circle-opacity": [
+                                    "case",
+                                    ["==", ["get", "is_for_sale"], true], 1,
+                                    ["==", ["get", "is_for_rent"], true], 1,
+                                    ["==", ["get", "is_open_to_talking"], true], 1,
+                                    ["==", ["get", "is_settled"], true], 0.7,
+                                    ["==", ["get", "is_claimed"], true], 0.7,
+                                    0.35  // unclaimed: subtle
+                                ],
+                                "circle-stroke-width": 0,
                             }}
                         />
 
@@ -1198,6 +1213,11 @@ export default function PropertyMap() {
                             <Layer
                                 id="anchor-radii"
                                 type="circle"
+                                filter={
+                                    anchorTierFilter === 'all'
+                                        ? true
+                                        : ["==", ["get", "tier"], anchorTierFilter]
+                                }
                                 paint={{
                                     // High-precision 800m radius for UK latitude (55°N)
                                     // Formula: 800m × (2^zoom) / (156543 × cos(55°))
@@ -1238,17 +1258,33 @@ export default function PropertyMap() {
                             <Layer
                                 id="anchor-icons"
                                 type="symbol"
+                                filter={
+                                    anchorTierFilter === 'all'
+                                        ? true
+                                        : ["==", ["get", "tier"], anchorTierFilter]
+                                }
                                 layout={{
                                     // Map subtype to hearth- prefixed icons loaded in handleLoad
                                     "icon-image": [
                                         "case",
+                                        // Schools (Foundational)
                                         ["==", ["get", "subtype"], "primary"], "hearth-school",
                                         ["==", ["get", "subtype"], "secondary"], "hearth-school",
+                                        // Transport (Practical)
                                         ["==", ["get", "subtype"], "metro"], "hearth-rail",
                                         ["==", ["get", "subtype"], "ferry"], "hearth-rail",
+                                        ["==", ["get", "subtype"], "bus"], "hearth-rail",
+                                        // Green Spaces (Spirit)
                                         ["==", ["get", "subtype"], "park"], "hearth-park",
                                         ["==", ["get", "subtype"], "coastal"], "hearth-coastal",
                                         ["==", ["get", "subtype"], "village_center"], "hearth-village",
+                                        // Health (Practical)
+                                        ["==", ["get", "subtype"], "gp"], "hearth-health",
+                                        ["==", ["get", "subtype"], "hospital"], "hearth-health",
+                                        ["==", ["get", "subtype"], "dentist"], "hearth-health",
+                                        // Shops (Practical)
+                                        ["==", ["get", "subtype"], "supermarket"], "hearth-shop",
+                                        ["==", ["get", "subtype"], "convenience"], "hearth-shop",
                                         "hearth-park"  // Default fallback
                                     ],
                                     "icon-size": 1,
@@ -1275,6 +1311,11 @@ export default function PropertyMap() {
                                 id="anchor-labels"
                                 type="symbol"
                                 minzoom={14}
+                                filter={
+                                    anchorTierFilter === 'all'
+                                        ? true
+                                        : ["==", ["get", "tier"], anchorTierFilter]
+                                }
                                 layout={{
                                     "text-field": ["get", "name"],
                                     "text-size": 10,
@@ -1403,6 +1444,22 @@ export default function PropertyMap() {
                     >
                         {is3D ? "3D Depth On" : "3D Depth Off"}
                     </button>
+
+                    {/* Row 3: Orientation Tier Filter - Filter anchors by tier */}
+                    <div className="flex overflow-hidden rounded-md border border-[#1B1B1B]/10 mt-2">
+                        {(['all', 'foundational', 'practical', 'spirit'] as const).map((tier, idx) => (
+                            <button
+                                key={tier}
+                                onClick={() => setAnchorTierFilter(tier)}
+                                className={`flex-1 px-2 py-1.5 text-[10px] font-medium capitalize transition-colors ${anchorTierFilter === tier
+                                    ? "bg-[#1B1B1B] text-white"
+                                    : "text-[#1B1B1B] hover:bg-gray-100"
+                                    } ${idx < 3 ? "border-r border-[#1B1B1B]/10" : ""}`}
+                            >
+                                {tier === 'all' ? 'All' : tier.charAt(0).toUpperCase() + tier.slice(1)}
+                            </button>
+                        ))}
+                    </div>
                 </div>
 
                 {/* Property card sheet */}
