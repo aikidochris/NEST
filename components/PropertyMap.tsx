@@ -1,14 +1,16 @@
 "use client";
 
 import { useState, useCallback, useRef, useEffect } from "react";
-import Map, { Source, Layer, ViewStateChangeEvent, MapRef } from "react-map-gl/maplibre";
+import Map, { Source, Layer, ViewStateChangeEvent, MapRef, Marker } from "react-map-gl/maplibre";
 import type { MapLayerMouseEvent, GeoJSONSource } from "maplibre-gl";
+import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import type { BBox } from "@/types/property";
 import { AuthControls } from "@/components/AuthControls";
 import { PropertyCardSheet } from "@/components/PropertyCardSheet";
 import { AreaVibeBar, type VibeStats, type LiveFeedEvent } from "@/components/AreaVibeBar";
 import { GlobalInboxOverlay } from "@/components/GlobalInboxOverlay";
+import { AnchorSnippet, featureToAnchorData, type AnchorFeatureProperties } from "@/components/AnchorSnippet";
 import { useAuth } from "@/app/AuthProvider";
 import { inspectLog, resolveStatus } from "@/lib/inspect";
 import { MapIntentProvider, type FlyToOptions, type OpenPropertyOptions } from "@/contexts/MapIntentContext";
@@ -23,8 +25,15 @@ const CLUSTER_MAX_ZOOM = 15;            // Clusters disappear at zoom > 15
 
 // Hearth Design System Colors
 const EMBER = "#E08E5F";                // Active states: for_sale, for_rent, open_to_talking
+const PAPER = "#F9F7F4";                // Background/horizon color
 const PAPER_GREY = "#9CA3AF";           // Unclaimed properties
 const OWNER_GREY = "#6B7280";           // Claimed with no active intent (settled, owner_no_status)
+const BUILDING_WARM = "#F1EFE9";        // 3D building extrusion (tone-on-tone editorial)
+const INK_GREY = "#8C8C8C";             // Anchor icons base color
+
+// Anchor visualization constants
+const ANCHOR_RADIUS_METERS = 800;       // 800m catchment radius
+const METERS_PER_PIXEL_AT_ZOOM_15 = 4.77; // For radius scaling
 
 // =============================================================================
 // MAP CONFIGURATION
@@ -154,6 +163,10 @@ export default function PropertyMap() {
     const liveFeedAbortRef = useRef<AbortController | null>(null);
     const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
 
+    // Manual pitch override: tracks if user has manually tilted the map
+    const manualPitchOverrideRef = useRef(false);
+    const hasAutoPitchedRef = useRef(false);
+
     // Cache for vibe stats by grid key
     const vibeCacheRef = useRef<globalThis.Map<string, VibeStats>>(new globalThis.Map());
 
@@ -162,6 +175,12 @@ export default function PropertyMap() {
 
     // Pulse animation radius for Living Pins
     const [pulseRadius, setPulseRadius] = useState(0);
+
+    // Neighborhood Anchors state
+    const [anchorData, setAnchorData] = useState<GeoJSON.FeatureCollection>(EMPTY_GEOJSON);
+    const [activeAnchorId, setActiveAnchorId] = useState<string | null>(null);
+    const [lockedAnchorIds, setLockedAnchorIds] = useState<string[]>([]);  // Array for toggle logic
+    const [selectedAnchor, setSelectedAnchor] = useState<GeoJSON.Feature<GeoJSON.Point, AnchorFeatureProperties> | null>(null);
 
     // Fetch cluster data (GeoJSON for clustering at low zoom)
     const fetchClusterData = useCallback(async (bbox: BBox, zoom: number) => {
@@ -263,6 +282,48 @@ export default function PropertyMap() {
         }
     }, []);
 
+    // Fetch neighborhood anchors
+    const fetchAnchorData = useCallback(async () => {
+        try {
+            const response = await fetch("/api/anchors");
+            if (!response.ok) {
+                setAnchorData(EMPTY_GEOJSON);
+                return;
+            }
+
+            const json = await response.json();
+            if (json.ok && json.geojson) {
+                setAnchorData(json.geojson);
+            }
+        } catch {
+            setAnchorData(EMPTY_GEOJSON);
+        }
+    }, []);
+
+    // Load anchors on mount
+    useEffect(() => {
+        fetchAnchorData();
+    }, [fetchAnchorData]);
+
+    // Handle anchor click - toggle lock/unlock for Morning Orbit radii
+    const handleAnchorClick = useCallback((anchorId: string) => {
+        const feature = anchorData.features.find(f => f.properties?.id === anchorId) as GeoJSON.Feature<GeoJSON.Point, AnchorFeatureProperties> | undefined;
+
+        // Toggle lock: click to pin, click again to remove
+        setLockedAnchorIds(prev =>
+            prev.includes(anchorId)
+                ? prev.filter(id => id !== anchorId)
+                : [...prev, anchorId]
+        );
+
+        // Update selected anchor for snippet display
+        if (feature && !lockedAnchorIds.includes(anchorId)) {
+            setSelectedAnchor(feature);
+        } else {
+            setSelectedAnchor(null);
+        }
+    }, [anchorData.features, lockedAnchorIds]);
+
     // Debounced fetch on map move
     const handleMoveEnd = useCallback(
         (evt: ViewStateChangeEvent) => {
@@ -288,6 +349,46 @@ export default function PropertyMap() {
         },
         [fetchClusterData, fetchVibeStats, vibeBarExpanded]
     );
+
+    // Smart Auto-Pitch: One-time trigger when zooming past threshold
+    // Respects manual user input (right-click tilt) by using override refs
+    useEffect(() => {
+        const map = mapRef.current?.getMap();
+        if (!map) return;
+
+        // Detect manual pitch changes (user right-click tilting)
+        const handlePitchStart = () => {
+            manualPitchOverrideRef.current = true;
+        };
+
+        map.on("pitchstart", handlePitchStart);
+
+        return () => {
+            map.off("pitchstart", handlePitchStart);
+        };
+    }, []);
+
+    // Auto-pitch on zoom: only trigger once, respect manual override
+    useEffect(() => {
+        const map = mapRef.current?.getMap();
+        if (!map || !is3D || viewMode === "satellite") return;
+
+        const zoom = viewState.zoom;
+
+        // Blueprint mode: always 45° pitch
+        if (viewMode === "blueprint") {
+            if (map.getPitch() < 40) {
+                map.easeTo({ pitch: 45, duration: 600 });
+            }
+            return;
+        }
+
+        // Paper mode: auto-pitch once when zooming past 16.5 (unless manually overridden)
+        if (!manualPitchOverrideRef.current && !hasAutoPitchedRef.current && zoom > 16.5) {
+            hasAutoPitchedRef.current = true;
+            map.easeTo({ pitch: 45, duration: 600 });
+        }
+    }, [viewState.zoom, is3D, viewMode]);
 
     // Fetch live feed events
     const fetchLiveFeed = useCallback(async (bbox: BBox) => {
@@ -322,8 +423,7 @@ export default function PropertyMap() {
         }
     }, []);
 
-
-    // Initial fetch on map load + set up cursor handlers
+    // Initial fetch on map load + set up cursor handlers + cinematic atmosphere
     const handleLoad = useCallback(
         (evt: { target: maplibregl.Map }) => {
             const map = evt.target;
@@ -333,6 +433,61 @@ export default function PropertyMap() {
                 const bbox = computeBBox(bounds);
                 fetchClusterData(bbox, map.getZoom());
                 fetchVibeStats(bbox);
+            }
+
+            // Cinematic Orientation: Atmospheric Fog
+            // Soft horizon fade into Paper background
+            try {
+                // TypeScript types incomplete for fog API (MapLibre 3.x+ feature)
+                (map as unknown as { setFog: (options: object) => void }).setFog({
+                    color: PAPER,
+                    range: [1, 12],
+                    "horizon-blend": 0.1
+                });
+            } catch (e) {
+                console.debug("Fog not supported:", e);
+            }
+
+            // Image Bank: Custom Hearth Anchor Icons
+            // Load minimalist SVG icons into map sprite for anchor visualization
+            const hearthIcons: Record<string, string> = {
+                // School: Minimalist graduation cap
+                "hearth-school": `data:image/svg+xml;base64,${btoa(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="24" height="24"><path d="M12 3L1 9l4 2.18v6L12 21l7-3.82v-6l2-1.09V17h2V9L12 3zm6.82 6L12 12.72 5.18 9 12 5.28 18.82 9zM17 15.99l-5 2.73-5-2.73v-3.72L12 15l5-2.73v3.72z"/></svg>`)}`,
+                // Rail: Minimalist train
+                "hearth-rail": `data:image/svg+xml;base64,${btoa(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="24" height="24"><path d="M12 2c-4 0-8 .5-8 4v9.5C4 17.43 5.57 19 7.5 19L6 20.5v.5h2.23l2-2H14l2 2h2v-.5L16.5 19c1.93 0 3.5-1.57 3.5-3.5V6c0-3.5-3.58-4-8-4zM7.5 17c-.83 0-1.5-.67-1.5-1.5S6.67 14 7.5 14s1.5.67 1.5 1.5S8.33 17 7.5 17zm3.5-7H6V6h5v4zm2 0V6h5v4h-5zm3.5 7c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5z"/></svg>`)}`,
+                // Park: Minimalist tree
+                "hearth-park": `data:image/svg+xml;base64,${btoa(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="24" height="24"><path d="M17 12h2L12 2 5 12h2l-3 8h7v2h2v-2h7l-3-8zm-5-6.5l4.3 5.5H13v3h-2v-3H7.7L12 5.5z"/></svg>`)}`,
+                // Coastal: Minimalist wave
+                "hearth-coastal": `data:image/svg+xml;base64,${btoa(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="24" height="24"><path d="M21 17c-1.1 0-2-.9-2-2 0 1.1-.9 2-2 2s-2-.9-2-2c0 1.1-.9 2-2 2s-2-.9-2-2c0 1.1-.9 2-2 2s-2-.9-2-2c0 1.1-.9 2-2 2v2c1.1 0 2-.9 2-2 0 1.1.9 2 2 2s2-.9 2-2c0 1.1.9 2 2 2s2-.9 2-2c0 1.1.9 2 2 2s2-.9 2-2c0 1.1.9 2 2 2v-2zm0-4c-1.1 0-2-.9-2-2 0 1.1-.9 2-2 2s-2-.9-2-2c0 1.1-.9 2-2 2s-2-.9-2-2c0 1.1-.9 2-2 2s-2-.9-2-2c0 1.1-.9 2-2 2v2c1.1 0 2-.9 2-2 0 1.1.9 2 2 2s2-.9 2-2c0 1.1.9 2 2 2s2-.9 2-2c0 1.1.9 2 2 2s2-.9 2-2c0 1.1.9 2 2 2v-2z"/></svg>`)}`,
+                // Village: Minimalist buildings
+                "hearth-village": `data:image/svg+xml;base64,${btoa(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="24" height="24"><path d="M15 11V5l-3-3-3 3v2H3v14h18V11h-6zm-8 8H5v-2h2v2zm0-4H5v-2h2v2zm0-4H5V9h2v2zm6 8h-2v-2h2v2zm0-4h-2v-2h2v2zm0-4h-2V9h2v2zm0-4h-2V5h2v2zm6 12h-2v-2h2v2zm0-4h-2v-2h2v2z"/></svg>`)}`
+            };
+
+            // Load all icons into map sprite
+            Object.entries(hearthIcons).forEach(([id, dataUri]) => {
+                const img = new Image(24, 24);
+                img.onload = () => {
+                    if (!map.hasImage(id)) {
+                        map.addImage(id, img, { sdf: true }); // SDF enables dynamic coloring
+                    }
+                };
+                img.src = dataUri;
+            });
+
+            // Cinematic Orientation: Hearth Sky
+            // Warm-neutral horizon for 3D tilt views using MapLibre's setSky API
+            try {
+                // TypeScript types incomplete for sky API (MapLibre experimental feature)
+                (map as unknown as { setSky: (options: object) => void }).setSky({
+                    "sky-color": PAPER,
+                    "sky-horizon-blend": 0.5,
+                    "horizon-color": PAPER,
+                    "horizon-fog-blend": 0.8,
+                    "fog-color": PAPER,
+                    "fog-ground-blend": 0.5
+                });
+            } catch (e) {
+                console.debug("Sky not supported:", e);
             }
 
             // Pointer cursor on interactive layers
@@ -445,8 +600,8 @@ export default function PropertyMap() {
                         type: "fill-extrusion",
                         minzoom: 14,
                         paint: {
-                            // Cinematic 3D: Warm white buildings with subtle ember tint
-                            "fill-extrusion-color": "#FFFAF5",
+                            // Cinematic 3D: Warm tone-on-tone editorial look
+                            "fill-extrusion-color": BUILDING_WARM,
                             "fill-extrusion-height": 6.5,
                             "fill-extrusion-base": 0,
                             "fill-extrusion-opacity": 0.6
@@ -498,18 +653,11 @@ export default function PropertyMap() {
             hideCommercialPOIs(map);
 
             // Handle 3D mode - buildings available in ALL modes when is3D is true
+            // Pitch is now controlled by the smooth pitch coupling useEffect and 2D toggle
             if (is3D) {
                 add3DBuildings();
-                // Reveal architectural depth with pitch
-                if (map.getPitch() < 30) {
-                    map.easeTo({ pitch: 45, duration: 800 });
-                }
             } else {
                 remove3DBuildings();
-                // Return to perfect top-down view
-                if (map.getPitch() > 0) {
-                    map.easeTo({ pitch: 0, duration: 800 });
-                }
             }
 
             // Stack layers correctly
@@ -539,6 +687,16 @@ export default function PropertyMap() {
         async (evt: MapLayerMouseEvent) => {
             const features = evt.features;
             if (!features || features.length === 0) return;
+
+            // Check for anchor icon click first
+            const anchorFeature = features.find((f) => f.layer?.id === "anchor-icons");
+            if (anchorFeature) {
+                const anchorId = anchorFeature.properties?.id;
+                if (anchorId) {
+                    handleAnchorClick(anchorId);
+                    return;
+                }
+            }
 
             // Check for cluster click first
             const clusterFeature = features.find((f) => f.layer?.id === "clusters");
@@ -726,6 +884,29 @@ export default function PropertyMap() {
         return () => cancelAnimationFrame(animationFrame);
     }, []);
 
+    // Update fog color based on view mode
+    // 'Architectural' Fog: center crisp, edges fade into Paper haze
+    // Paper Mode: Color #F9F7F4, Range [0.2, 10] - warm haze
+    // Satellite Mode: Color #FFFFFF, Range [0.5, 15] - atmospheric depth
+    useEffect(() => {
+        const map = mapRef.current?.getMap();
+        if (!map) return;
+
+        try {
+            const isSatellite = viewMode === "satellite";
+            const fogColor = isSatellite ? "#FFFFFF" : PAPER;
+            const fogRange: [number, number] = isSatellite ? [0.5, 15] : [0.2, 10];
+
+            (map as unknown as { setFog: (options: object) => void }).setFog({
+                color: fogColor,
+                range: fogRange,
+                "horizon-blend": 0.1
+            });
+        } catch {
+            // Fog not supported
+        }
+    }, [viewMode]);
+
 
     // Toggle vibe bar expand and fetch live feed
     const handleToggleVibeBar = useCallback(() => {
@@ -781,11 +962,11 @@ export default function PropertyMap() {
                     onMoveEnd={handleMoveEnd}
                     onLoad={handleLoad}
                     onClick={handleMapClick}
-                    interactiveLayerIds={["property-points", "clusters", "unclustered-point", "hearth-pins"]}
+                    interactiveLayerIds={["property-points", "clusters", "unclustered-point", "hearth-pins", "anchor-icons"]}
                     style={{ width: "100%", height: "100%" }}
                     mapStyle={MAP_STYLE}
                 >
-                    {/* Satellite layer with Glass filter - first child for proper z-ordering */}
+                    {/* Satellite layer - High-Fi reality-focused imagery */}
                     {viewMode === "satellite" && (
                         <Source id="satellite-source" type="raster" tiles={[ARCGIS_SATELLITE_URL]} tileSize={256}>
                             <Layer
@@ -793,9 +974,9 @@ export default function PropertyMap() {
                                 type="raster"
                                 beforeId="water"
                                 paint={{
-                                    "raster-brightness-min": 0.1,
-                                    "raster-contrast": 0.2,
-                                    "raster-saturation": -0.6  // Glass filter: muted satellite
+                                    "raster-brightness-min": 0.05,
+                                    "raster-contrast": 0.1,
+                                    "raster-saturation": 0  // Hi-Fi 2025: natural greens and blues pop
                                 }}
                             />
                         </Source>
@@ -810,6 +991,32 @@ export default function PropertyMap() {
                         minzoom={0}
                         maxzoom={14}
                     >
+                        {/* Hearth Halo - Building Glow Layer (Internal Light effect) */}
+                        {/* Creates EMBER glow beneath active houses - workaround since we can't color 3D buildings */}
+                        <Layer
+                            id="building-glow"
+                            type="circle"
+                            source-layer="properties"
+                            minzoom={CLUSTER_MAX_ZOOM}
+                            filter={[
+                                "any",
+                                ["==", ["get", "is_open_to_talking"], true],
+                                ["==", ["get", "is_for_sale"], true],
+                                ["==", ["get", "is_for_rent"], true]
+                            ]}
+                            paint={{
+                                "circle-color": EMBER,
+                                "circle-opacity": 0.2,
+                                "circle-radius": [
+                                    "interpolate", ["linear"], ["zoom"],
+                                    15, 15,
+                                    17, 35,
+                                    19, 60
+                                ],
+                                "circle-blur": 0.8
+                            }}
+                        />
+
                         {/* Base Pin Layer - GPU expression for instant status colors */}
                         <Layer
                             id="hearth-pins"
@@ -983,6 +1190,115 @@ export default function PropertyMap() {
                         </Source>
                     )}
 
+                    {/* Neighborhood Anchors - Accurate 800m radii layer */}
+                    {anchorData.features.length > 0 && (
+                        <Source id="anchor-source" type="geojson" data={anchorData}>
+                            {/* Anchor Radii - 800m (10-minute walk) catchment circles */}
+                            {/* Uses exponential interpolation calibrated for UK latitude (55°N) */}
+                            <Layer
+                                id="anchor-radii"
+                                type="circle"
+                                paint={{
+                                    // High-precision 800m radius for UK latitude (55°N)
+                                    // Formula: 800m × (2^zoom) / (156543 × cos(55°))
+                                    "circle-radius": [
+                                        "interpolate", ["exponential", 2], ["zoom"],
+                                        10, 12.5,
+                                        15, 400,
+                                        20, 12800
+                                    ],
+                                    // Lie flat on ground in 3D view
+                                    "circle-pitch-alignment": "map",
+                                    // Morning Orbit: Ember fill at 10% opacity for active/locked
+                                    "circle-color": EMBER,
+                                    "circle-opacity": [
+                                        "case",
+                                        ["in", ["get", "id"], ["literal", lockedAnchorIds]],
+                                        0.1,
+                                        ["==", ["get", "id"], activeAnchorId || ""],
+                                        0.1,
+                                        0
+                                    ],
+                                    // Visual Trust: clear 10-minute walk boundary
+                                    "circle-stroke-width": [
+                                        "case",
+                                        ["in", ["get", "id"], ["literal", lockedAnchorIds]],
+                                        2,
+                                        ["==", ["get", "id"], activeAnchorId || ""],
+                                        2,
+                                        0
+                                    ],
+                                    "circle-stroke-color": EMBER,
+                                    "circle-stroke-opacity": 0.3
+                                }}
+                            />
+
+                            {/* Anchor Icons - Premium Symbol Layer with custom SVG icons */}
+                            {/* Uses INK_GREY base with white halo for editorial appearance */}
+                            <Layer
+                                id="anchor-icons"
+                                type="symbol"
+                                layout={{
+                                    // Map subtype to hearth- prefixed icons loaded in handleLoad
+                                    "icon-image": [
+                                        "case",
+                                        ["==", ["get", "subtype"], "primary"], "hearth-school",
+                                        ["==", ["get", "subtype"], "secondary"], "hearth-school",
+                                        ["==", ["get", "subtype"], "metro"], "hearth-rail",
+                                        ["==", ["get", "subtype"], "ferry"], "hearth-rail",
+                                        ["==", ["get", "subtype"], "park"], "hearth-park",
+                                        ["==", ["get", "subtype"], "coastal"], "hearth-coastal",
+                                        ["==", ["get", "subtype"], "village_center"], "hearth-village",
+                                        "hearth-park"  // Default fallback
+                                    ],
+                                    "icon-size": 1,
+                                    "icon-allow-overlap": true,
+                                    "icon-ignore-placement": true
+                                }}
+                                paint={{
+                                    // GPU expression: EMBER if active/locked, INK_GREY otherwise (SDF coloring)
+                                    "icon-color": [
+                                        "case",
+                                        ["in", ["get", "id"], ["literal", lockedAnchorIds]],
+                                        EMBER,
+                                        ["==", ["get", "id"], activeAnchorId || ""],
+                                        EMBER,
+                                        INK_GREY
+                                    ],
+                                    "icon-halo-color": "#ffffff",
+                                    "icon-halo-width": 1
+                                }}
+                            />
+
+                            {/* Anchor Labels */}
+                            <Layer
+                                id="anchor-labels"
+                                type="symbol"
+                                minzoom={14}
+                                layout={{
+                                    "text-field": ["get", "name"],
+                                    "text-size": 10,
+                                    "text-offset": [0, 1.2],
+                                    "text-anchor": "top",
+                                    "text-max-width": 8
+                                }}
+                                paint={{
+                                    "text-color": [
+                                        "case",
+                                        ["in", ["get", "id"], ["literal", Array.from(lockedAnchorIds)]],
+                                        EMBER,
+                                        ["==", ["get", "id"], activeAnchorId || ""],
+                                        EMBER,
+                                        INK_GREY
+                                    ],
+                                    "text-halo-color": "#ffffff",
+                                    "text-halo-width": 1
+                                }}
+                            />
+                        </Source>
+                    )}
+
+
                 </Map>
 
                 {/* Top Filter Bar */}
@@ -1024,14 +1340,34 @@ export default function PropertyMap() {
                     {/* Satellite Toggle (Deprecated by Mode Selector) */}
                 </div>
 
-                {/* Instrument Bar - Unified View Controls */}
-                <div className="absolute bottom-10 right-4 flex flex-col gap-1.5 z-10 bg-[#F9F7F4] border border-[#1B1B1B]/10 rounded-lg shadow-sm p-1.5">
-                    {/* Row 1: View Mode */}
+                {/* Instrument Bar - Unified View Controls with Hearth Design Bible polish */}
+                <div className="absolute bottom-10 right-4 flex flex-col gap-1.5 z-10 bg-[#F9F7F4]/95 backdrop-blur-[24px] border border-[#1B1B1B]/10 rounded-lg shadow-sm p-1.5 font-['Inter',sans-serif]">
+                    {/* Row 1: View Mode - Rationalized State Machine */}
                     <div className="flex rounded-md overflow-hidden">
                         {(["paper", "blueprint", "satellite"] as const).map((mode) => (
                             <button
                                 key={mode}
-                                onClick={() => setViewMode(mode)}
+                                onClick={() => {
+                                    const map = mapRef.current?.getMap();
+                                    setViewMode(mode);
+
+                                    // Reset manual override when switching modes
+                                    manualPitchOverrideRef.current = false;
+                                    hasAutoPitchedRef.current = false;
+
+                                    if (mode === "paper") {
+                                        // Paper: flat top-down, clean lines
+                                        if (map) map.easeTo({ pitch: 0, duration: 400 });
+                                    } else if (mode === "blueprint") {
+                                        // Blueprint: stark 3D, always 45° pitch
+                                        setIs3D(true);
+                                        if (map) map.easeTo({ pitch: 45, duration: 600 });
+                                    } else if (mode === "satellite") {
+                                        // Satellite: reality-focused, 3D OFF by default for clear photos
+                                        setIs3D(false);
+                                        if (map) map.easeTo({ pitch: 0, duration: 400 });
+                                    }
+                                }}
                                 className={`px-3 py-1.5 text-xs font-medium capitalize transition-colors ${viewMode === mode
                                     ? "bg-[#1B1B1B] text-white"
                                     : "text-[#1B1B1B] hover:bg-gray-100"
@@ -1042,9 +1378,24 @@ export default function PropertyMap() {
                         ))}
                     </div>
 
-                    {/* Row 2: Depth Toggle */}
+                    {/* Row 2: Depth Toggle - Camera Pitch Invariant */}
                     <button
-                        onClick={() => setIs3D(!is3D)}
+                        onClick={() => {
+                            const map = mapRef.current?.getMap();
+                            if (is3D) {
+                                // Switching to 2D: smooth ease to flat over 1000ms
+                                setIs3D(false);
+                                if (map) {
+                                    map.easeTo({ pitch: 0, duration: 1000 });
+                                }
+                            } else {
+                                // Switching to 3D: smooth ease to 45° pitch over 1000ms
+                                setIs3D(true);
+                                if (map) {
+                                    map.easeTo({ pitch: 45, duration: 1000 });
+                                }
+                            }
+                        }}
                         className={`w-full px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${is3D
                             ? "bg-[#1B1B1B] text-white"
                             : "text-[#1B1B1B] hover:bg-gray-100 border border-[#1B1B1B]/10"

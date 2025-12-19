@@ -202,3 +202,6 @@ This has been ran in supabase
 20251217_005_messaging.sql - this has been applied
 20251217_006_messaging.sql - this has been applied
 20251217_007_messaging.sql - this has been applied
+20251219_001_mvt_intent_flags.sql - this has been applied
+20251219_002_neighborhood_anchors_seed.sql - this has been applied
+20251219_003_admin_roles.sql - this has been applied
