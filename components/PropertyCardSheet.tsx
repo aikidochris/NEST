@@ -23,6 +23,8 @@ interface PropertyCardSheetProps {
     onClose: () => void;
     /** Callback after successful claim */
     onClaimSuccess: () => void;
+    /** Callback to refresh map pins instantly */
+    onRefreshPins?: () => Promise<void>;
     /** Callback when navigating to a neighbour property (with optional coordinates for fly-to) */
     onSelectNeighbour?: (propertyId: string, lat?: number, lon?: number) => void;
     /** Whether to use mobile layout */
@@ -41,6 +43,7 @@ export function PropertyCardSheet({
     propertyId,
     onClose,
     onClaimSuccess,
+    onRefreshPins,
     onSelectNeighbour,
     isMobile = false,
     initialOpenMode = "card",
@@ -160,9 +163,10 @@ export function PropertyCardSheet({
             }
             // Trigger map pin refresh
             refreshIntentOverlay(propertyId);
+            onRefreshPins?.(); // Instant UI Echo
             onClaimSuccess();
         }
-    }, [claim, propertyId, property, onClaimSuccess, refreshIntentOverlay]);
+    }, [claim, propertyId, property, onClaimSuccess, refreshIntentOverlay, onRefreshPins]);
 
     // Handle message action - opens Tier 2 modal where messaging is embedded
     const handleMessage = useCallback(() => {
@@ -211,13 +215,14 @@ export function PropertyCardSheet({
 
         if (success) {
             console.log("[Owner] Status persisted to database:", status);
+            onRefreshPins?.(); // Instant UI Echo
         } else {
             console.error("[Owner] Failed to persist status");
         }
 
         // Trigger map pin refresh (will re-fetch from DB)
         refreshIntentOverlay(property.property_id);
-    }, [property, refreshIntentOverlay]);
+    }, [property, refreshIntentOverlay, onRefreshPins]);
 
     // Handle story update (owner)
     const handleStoryUpdate = useCallback(async (story: string) => {

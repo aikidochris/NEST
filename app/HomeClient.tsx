@@ -1,6 +1,8 @@
 "use client";
 
+import { useRef } from "react";
 import dynamic from "next/dynamic";
+import type { PropertyMapRef } from "@/components/PropertyMap";
 
 // Dynamic import to avoid SSR issues with maplibre-gl
 const PropertyMap = dynamic(() => import("@/components/PropertyMap"), {
@@ -13,9 +15,11 @@ const PropertyMap = dynamic(() => import("@/components/PropertyMap"), {
 });
 
 export default function HomeClient() {
+    const mapRef = useRef<PropertyMapRef>(null);
+
     return (
         <main className="w-full h-screen">
-            <PropertyMap />
+            <PropertyMap ref={mapRef} />
         </main>
     );
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import type { PropertyPublic, PropertyImage as PropertyImageType } from "@/types/property";
 import { PropertyImage } from "./PropertyImage";
 import { PropertyImageLightbox } from "./PropertyImageLightbox";
@@ -12,6 +12,11 @@ import { getChipStyle, getPublicLabel, getPinColor } from "@/lib/statusStyles";
 import { resolveStatus, type Status } from "@/lib/status";
 import { isInspectOn } from "@/lib/inspect";
 import { listConversationsForProperty, getConversationForProperty } from "@/lib/messaging";
+import {
+    type ProximityAnchor,
+    processProximityAnchors,
+    MAX_WALK_THRESHOLD_METERS
+} from "@/lib/proximity";
 
 // =============================================================================
 // PROPERTY PROFILE MODAL (Tier 2 - S06)
@@ -139,11 +144,40 @@ export function PropertyProfileModal({
     const [pendingQuotedNote, setPendingQuotedNote] = useState<{ body: string; created_at: string } | null>(null);
     const [pendingNoteId, setPendingNoteId] = useState<string | null>(null);
     const [pendingNoteAuthorId, setPendingNoteAuthorId] = useState<string | null>(null);
+    const [proximityAnchors, setProximityAnchors] = useState<ProximityAnchor[]>([]);
+    const [isFactsExpanded, setIsFactsExpanded] = useState(false);
 
     // Load images (mocked for now)
     useEffect(() => {
         setImages(getMockImages(property));
     }, [property]);
+
+    // Proximity Guard: State for raw anchor data (cached in state)
+    const [allAnchors, setAllAnchors] = useState<any[]>([]);
+
+    useEffect(() => {
+        const fetchAllAnchors = async () => {
+            if (allAnchors.length > 0) return; // Only fetch once
+            try {
+                const response = await fetch("/api/anchors");
+                const geojson = await response.json();
+                if (geojson.features) {
+                    setAllAnchors(geojson.features);
+                }
+            } catch (err) {
+                console.error("Failed to fetch anchors for cache:", err);
+            }
+        };
+        fetchAllAnchors();
+    }, [allAnchors.length]);
+
+    // Proximity Guard: Memoized processing (runs only when property coordinates change)
+    const proximityPills = useMemo(() => {
+        if (!property.lat || !property.lon || allAnchors.length === 0) {
+            return [];
+        }
+        return processProximityAnchors(allAnchors, property.lat, property.lon);
+    }, [property.lat, property.lon, allAnchors]);
 
     // Log OPEN_PROPERTY_APPLIED on mount (confirms UI has opened)
     useEffect(() => {
@@ -373,326 +407,305 @@ export function PropertyProfileModal({
         ? images.filter(img => img.visibility === "private" || img.visibility === "followers")
         : [];
 
+    // Hero Media Priority: hero_image_url || thumbnail_url || cover_image_url || fallback
+    const heroMediaSrc = property.hero_image_url || property.thumbnail_url || property.cover_image_url || '/placeholder-home.jpg';
+
+    // Vibe Subtitle Priority: metadata->'vibe_label' || metadata->'story_summary' || summary_text || fallback
+    const vibeSubtitle = property.metadata?.vibe_label || property.metadata?.story_summary || property.summary_text || "Neighborhood Vibe";
+
     return (
         <>
-            <div className="fixed inset-0 z-50 flex items-center justify-center">
-                {/* Backdrop */}
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+                {/* Backdrop with extreme blur and 'Ember' glow saturates/sepia */}
                 <div
-                    className="absolute inset-0 bg-black/60"
+                    className="absolute inset-0 bg-black/40 backdrop-blur-[24px] backdrop-saturate-[1.2] backdrop-sepia-[0.2]"
                     onClick={onClose}
                 />
 
-                {/* Modal */}
+                {/* Modal with radial gradient background overlay */}
                 <div
-                    className="relative bg-white dark:bg-gray-900 rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-hidden mx-4"
+                    className="relative rounded-2xl shadow-2xl w-full max-w-2xl max-h-[95vh] overflow-hidden flex flex-col"
+                    style={{
+                        background: 'radial-gradient(circle, rgba(224,142,95,0.05) 0%, rgba(249,247,242,0.95) 100%)',
+                        backdropFilter: 'blur(12px)'
+                    }}
                     role="dialog"
                     aria-modal="true"
                     aria-labelledby="profile-modal-title"
                 >
-                    {/* Close button */}
-                    <button
-                        onClick={onClose}
-                        className="absolute top-4 right-4 z-10 p-2 bg-black/40 hover:bg-black/60 rounded-full text-white transition-colors"
-                        aria-label="Close"
-                    >
-                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                        </svg>
-                    </button>
-
-                    {/* Content area */}
-                    <div className="overflow-y-auto max-h-[90vh]">
-                        {/* Gallery grid */}
-                        <div className="p-4">
-                            <div className="grid grid-cols-2 gap-2">
-                                {/* Cover image (large) - clickable for lightbox */}
-                                {property.cover_image_url && (
-                                    <div
-                                        className="col-span-2 cursor-pointer"
-                                        onClick={() => setLightboxImage({
-                                            src: property.cover_image_url!,
-                                            alt: title
-                                        })}
-                                    >
-                                        <PropertyImage
-                                            src={property.cover_image_url}
-                                            alt={title}
-                                            aspectRatio="16:9"
-                                        />
-                                    </div>
-                                )}
-
-                                {/* Public album images */}
-                                {publicImages.filter(img => img.kind === "album").map((img) => (
-                                    <div
-                                        key={img.id}
-                                        className="cursor-pointer"
-                                        onClick={() => img.url && setLightboxImage({
-                                            src: img.url,
-                                            alt: img.album_key || "Album photo"
-                                        })}
-                                    >
-                                        <PropertyImage
-                                            src={img.url}
-                                            alt={img.album_key || "Album photo"}
-                                            aspectRatio="4:3"
-                                        />
-                                    </div>
-                                ))}
-
-                                {/* Unlocked chat images (via conversation) */}
-                                {unlockedChatImages.map((img) => (
-                                    <div
-                                        key={img.id}
-                                        className="cursor-pointer relative"
-                                        onClick={() => img.url && setLightboxImage({
-                                            src: img.url,
-                                            alt: img.album_key || "Album photo"
-                                        })}
-                                    >
-                                        <PropertyImage
-                                            src={img.url || null}
-                                            alt={img.album_key || "Album photo"}
-                                            aspectRatio="4:3"
-                                        />
-                                        {/* Unlocked badge */}
-                                        <div className="absolute top-2 left-2 px-2 py-0.5 bg-teal-500/90 text-white text-xs rounded-full">
-                                            Shared
-                                        </div>
-                                    </div>
-                                ))}
-
-                                {/* Private images (owner only) */}
-                                {privateImages.map((img) => (
-                                    <div
-                                        key={img.id}
-                                        className="cursor-pointer relative"
-                                        onClick={() => img.url && setLightboxImage({
-                                            src: img.url,
-                                            alt: img.album_key || "Private photo"
-                                        })}
-                                    >
-                                        <PropertyImage
-                                            src={img.url || null}
-                                            alt={img.album_key || "Private photo"}
-                                            aspectRatio="4:3"
-                                        />
-                                        {/* Private badge */}
-                                        <div className="absolute top-2 left-2 px-2 py-0.5 bg-gray-700/90 text-white text-xs rounded-full">
-                                            Private
-                                        </div>
-                                    </div>
-                                ))}
-
-                                {/* Locked album tiles */}
-                                {lockedImages.map((img) => (
-                                    <div key={img.id} className="relative">
-                                        <PropertyImage
-                                            src={null}
-                                            alt={img.album_key ? `${img.album_key} photos` : "Locked photos"}
-                                            aspectRatio="4:3"
-                                            isLocked={true}
-                                        />
-                                        {/* Album label on locked tile */}
-                                        <div className="absolute bottom-0 left-0 right-0 p-3 bg-gradient-to-t from-black/60 to-transparent">
-                                            <p className="text-white text-sm font-medium capitalize">
-                                                {img.album_key || "Photos"}
-                                            </p>
-                                            <p className="text-white/70 text-xs">
-                                                Shared through chat
-                                            </p>
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-
-                        {/* Owner tools panel (if owner) */}
-                        {property.is_mine && (
-                            <OwnerToolsPanel
-                                property={property}
-                                onStatusUpdate={onStatusUpdate}
-                                onStoryUpdate={onStoryUpdate}
-                                onCoverUpload={onCoverUpload}
-                            />
-                        )}
-
-                        {/* Waiting notes panel (if owner) */}
-                        <WaitingNotesPanel
-                            propertyId={property.property_id}
-                            isOwner={property.is_mine === true}
-                            status={resolveStatus({
-                                is_claimed: property.is_claimed, intent_flags: {
-                                    soft_listing: property.is_open_to_talking ?? null,
-                                    settled: property.is_settled ?? null,
-                                    is_for_sale: property.is_for_sale ?? null,
-                                    is_for_rent: property.is_for_rent ?? null,
-                                }
-                            })}
-                            onReply={(conversationId, quotedNote, noteId, authorUserId) => {
-                                if (isInspectOn()) {
-                                    console.log("[NEST_INSPECT] WAITING_NOTE_REPLY_CLICK", {
-                                        property_id: property.property_id,
-                                        note_id: noteId,
-                                        author_user_id: authorUserId,
-                                    });
-                                }
-                                setSelectedOwnerConversationId(conversationId);
-                                setPendingQuotedNote(quotedNote);
-                                setPendingNoteId(noteId);
-                                setPendingNoteAuthorId(authorUserId);
-                                setOwnerPanelMode("thread");
-                                setOwnerEntryPoint("row");
-                                setShowOwnerInbox(true);
-                                onNoteReply?.(conversationId);
-                            }}
+                    {/* Header: Cinematic 16:10 Full-bleed */}
+                    <div className="relative aspect-[16/10] w-full overflow-hidden flex-shrink-0">
+                        <img
+                            src={heroMediaSrc}
+                            alt={title}
+                            className="w-full h-full object-cover cursor-pointer hover:scale-105 transition-transform duration-700"
+                            onClick={() => setLightboxImage({ src: heroMediaSrc, alt: title })}
                         />
 
-                        {/* Owner inbox: preview when collapsed, full panel when expanded */}
-                        {property.is_mine && (
-                            <>
-                                {showOwnerInbox ? (
-                                    <div className="px-4 pb-4">
-                                        <div className="border border-gray-200 rounded-xl overflow-hidden" style={{ height: "400px" }}>
-                                            <PropertyMessagePanel
-                                                property={property}
-                                                onClose={() => {
-                                                    // Always return to summary view when closing
-                                                    setShowOwnerInbox(false);
-                                                    setSelectedOwnerConversationId(null);
-                                                    setPendingQuotedNote(null);
-                                                    setPendingNoteId(null);
-                                                    setPendingNoteAuthorId(null);
-                                                    setOwnerPanelMode("list");
-                                                    setOwnerEntryPoint("viewall");
-                                                }}
-                                                conversationId={selectedOwnerConversationId}
-                                                onSelectNeighbour={onSelectNeighbour}
-                                                mode={ownerPanelMode}
-                                                isOwnerView={true}
-                                                draftNote={pendingNoteId && pendingNoteAuthorId && pendingQuotedNote ? {
-                                                    noteId: pendingNoteId,
-                                                    authorUserId: pendingNoteAuthorId,
-                                                    quotedNote: pendingQuotedNote,
-                                                } : null}
-                                            />
+                        {/* Status Overlay */}
+                        <div className="absolute top-4 left-4 flex gap-2">
+                            {intentStatuses.map((status) => {
+                                const { bg, text } = getChipStyle(status);
+                                const label = getPublicLabel(status);
+                                if (!label) return null;
+                                return (
+                                    <span
+                                        key={status}
+                                        className={`px-3 py-1 text-[10px] font-bold tracking-wider uppercase rounded-full backdrop-blur-md shadow-lg ${bg} ${text}`}
+                                    >
+                                        {label}
+                                    </span>
+                                );
+                            })}
+                        </div>
+                    </div>
+
+                    {/* Scrollable Content */}
+                    <div className="flex-1 overflow-y-auto no-scrollbar">
+                        <div className="px-6 py-6 pb-24">
+                            {/* Header Info */}
+                            <div className="mb-6">
+                                <h2
+                                    id="profile-modal-title"
+                                    className="text-3xl font-serif text-gray-900 mb-1"
+                                >
+                                    {title}
+                                </h2>
+                                <p className="text-amber-700/80 font-serif italic text-sm mb-4">
+                                    {vibeSubtitle}
+                                </p>
+
+                                {/* Proximity Guard */}
+                                <div className="mb-8">
+                                    {proximityPills.length === 0 ? (
+                                        <div className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-gray-100/50 rounded-full text-[10px] font-medium text-gray-500">
+                                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
+                                            </svg>
+                                            Quiet residential pocket
+                                        </div>
+                                    ) : (
+                                        <div className="flex flex-wrap gap-2">
+                                            {proximityPills.map((anchor: ProximityAnchor) => (
+                                                <div
+                                                    key={anchor.id}
+                                                    className="flex items-center gap-1.5 px-3 py-2 bg-white/60 backdrop-blur-sm border border-gray-100 shadow-sm rounded-lg text-[10px] font-semibold text-gray-700"
+                                                >
+                                                    {anchor.category === 'school' && '🎓'}
+                                                    {anchor.category === 'transport' && '🚆'}
+                                                    {anchor.category === 'spirit' && '🍃'}
+                                                    {anchor.category === 'amenity' && '☕'}
+                                                    <span>{anchor.walkMins} min walk to {anchor.name}</span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+
+                            {/* From the Owner (Editorial Section) */}
+                            <div className="mb-10 bg-[#FAF9F6] border border-gray-100/50 rounded-2xl p-6 shadow-sm">
+                                <div className="flex items-center justify-between mb-4">
+                                    <h3 className="text-lg font-serif italic text-gray-800">From the Owner</h3>
+                                    <div className="w-10 h-10 rounded-full overflow-hidden bg-gray-200 border-2 border-white shadow-sm ring-1 ring-gray-100">
+                                        <img
+                                            src="https://api.dicebear.com/7.x/avataaars/svg?seed=Felix"
+                                            alt="Owner"
+                                            className="w-full h-full object-cover"
+                                        />
+                                    </div>
+                                </div>
+                                <div className="space-y-4">
+                                    <p className="text-gray-700 text-sm leading-relaxed font-serif italic opacity-90">
+                                        "{story}"
+                                    </p>
+                                </div>
+                            </div>
+
+                            {/* Property Facts Accordion */}
+                            <div className="mb-10 border-t border-gray-100">
+                                <button
+                                    onClick={() => setIsFactsExpanded(!isFactsExpanded)}
+                                    className="w-full py-4 flex items-center justify-between group"
+                                >
+                                    <span className="text-sm font-semibold text-gray-800 group-hover:text-amber-600 transition-colors">Property Facts (EPC, Floor Area)</span>
+                                    <svg
+                                        className={`w-4 h-4 text-gray-400 transition-transform duration-300 ${isFactsExpanded ? 'rotate-180' : ''}`}
+                                        fill="none"
+                                        stroke="currentColor"
+                                        viewBox="0 0 24 24"
+                                    >
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                                    </svg>
+                                </button>
+                                {isFactsExpanded && (
+                                    <div className="pb-6 grid grid-cols-2 gap-4">
+                                        <div className="bg-white/40 p-3 rounded-xl border border-gray-100">
+                                            <p className="text-[10px] uppercase tracking-widest text-gray-400 mb-1">Floor Area</p>
+                                            <p className="text-sm font-medium text-gray-800">1,240 sq ft</p>
+                                        </div>
+                                        <div className="bg-white/40 p-3 rounded-xl border border-gray-100">
+                                            <p className="text-[10px] uppercase tracking-widest text-gray-400 mb-1">EPC Rating</p>
+                                            <p className="text-sm font-medium text-gray-800">B (84)</p>
+                                        </div>
+                                        <div className="bg-white/40 p-3 rounded-xl border border-gray-100">
+                                            <p className="text-[10px] uppercase tracking-widest text-gray-400 mb-1">Council Tax</p>
+                                            <p className="text-sm font-medium text-gray-800">Band D</p>
+                                        </div>
+                                        <div className="bg-white/40 p-3 rounded-xl border border-gray-100">
+                                            <p className="text-[10px] uppercase tracking-widest text-gray-400 mb-1">Tenure</p>
+                                            <p className="text-sm font-medium text-gray-800">Freehold</p>
                                         </div>
                                     </div>
-                                ) : (
-                                    <OwnerInboxPreview
-                                        propertyId={property.property_id}
-                                        maxItems={5}
-                                        onSelectConversation={(conversationId) => {
-                                            setSelectedOwnerConversationId(conversationId);
-                                            setOwnerPanelMode("thread");
-                                            setOwnerEntryPoint("row");
-                                            setShowOwnerInbox(true);
-                                        }}
-                                        onViewAll={() => {
-                                            setSelectedOwnerConversationId(null);
-                                            setOwnerPanelMode("list");
-                                            setOwnerEntryPoint("viewall");
-                                            setShowOwnerInbox(true);
-                                        }}
-                                    />
                                 )}
-                            </>
-                        )}
-
-                        {/* Viewer message panel (non-owner, opened via openProperty) */}
-                        {!property.is_mine && showMessagePanel && (
-                            <div className="px-4 pb-4">
-                                <div className="border border-gray-200 rounded-xl overflow-hidden" style={{ height: "400px" }}>
-                                    <PropertyMessagePanel
-                                        property={property}
-                                        onClose={() => setShowMessagePanel(false)}
-                                        conversationId={initialConversationId}
-                                        onSelectNeighbour={onSelectNeighbour}
-                                    />
-                                </div>
                             </div>
-                        )}
 
-                        {/* Story section */}
-                        <div className="px-4 pb-4">
-                            <h2
-                                id="profile-modal-title"
-                                className="text-xl font-semibold text-gray-900 dark:text-white mb-2"
-                            >
-                                {title}
-                            </h2>
-
-                            {/* Intent chips */}
-                            {intentStatuses.length > 0 && (
-                                <div className="flex flex-wrap gap-2 mb-4">
-                                    {intentStatuses.map((status) => {
-                                        const { bg, text } = getChipStyle(status);
-                                        const label = getPublicLabel(status);
-                                        if (!label) return null;
-                                        return (
-                                            <span
-                                                key={status}
-                                                className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-full ${bg} ${text}`}
-                                            >
-                                                <span
-                                                    className="w-2 h-2 rounded-full"
-                                                    style={{ backgroundColor: getPinColor(status) }}
+                            {/* Multi-Image Grid (Owner Gallery) */}
+                            <div className="mb-10">
+                                <h4 className="text-xs font-bold uppercase tracking-[0.2em] text-gray-400 mb-6 px-1">Gallery</h4>
+                                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                                    {publicImages.filter(img => img.kind === "album").concat(unlockedChatImages).concat(privateImages).map((img, idx) => (
+                                        <div
+                                            key={img.id}
+                                            className={`relative group cursor-pointer overflow-hidden rounded-xl border border-[#DEDBD1] bg-white shadow-sm transition-all hover:shadow-md ${idx === 0 ? 'sm:col-span-2 sm:row-span-2' : ''}`}
+                                            onClick={() => img.url && setLightboxImage({ src: img.url, alt: img.album_key || "Photo" })}
+                                        >
+                                            <div className="aspect-square w-full">
+                                                <img
+                                                    src={img.url || '/placeholder-home.jpg'}
+                                                    alt={img.album_key || "Gallery"}
+                                                    loading="lazy"
+                                                    className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110"
                                                 />
-                                                {label}
-                                            </span>
-                                        );
-                                    })}
-                                </div>
-                            )}
+                                            </div>
+                                            {img.visibility === 'chat_unlocked' && (
+                                                <div className="absolute top-2 right-2 px-1.5 py-0.5 bg-teal-500 text-white text-[8px] font-bold uppercase tracking-wider rounded backdrop-blur-md shadow-sm">
+                                                    Unlocked
+                                                </div>
+                                            )}
+                                            {img.visibility === 'private' && (
+                                                <div className="absolute top-2 right-2 px-1.5 py-0.5 bg-gray-500 text-white text-[8px] font-bold uppercase tracking-wider rounded backdrop-blur-md shadow-sm">
+                                                    Private
+                                                </div>
+                                            )}
+                                        </div>
+                                    ))}
 
-                            {/* Full story */}
-                            <div className="prose prose-sm dark:prose-invert max-w-none mb-6">
-                                <p className="text-gray-700 dark:text-gray-300 leading-relaxed whitespace-pre-wrap">
-                                    {story}
-                                </p>
+                                    {/* Locked album tiles */}
+                                    {!property.is_mine && lockedImages.map((img) => (
+                                        <div key={img.id} className="relative aspect-square rounded-xl bg-gray-100 border-2 border-dashed border-gray-200 flex flex-col items-center justify-center p-4 text-center group transition-colors hover:bg-gray-50 uppercase">
+                                            <svg className="w-5 h-5 text-gray-300 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                                            </svg>
+                                            <p className="text-[10px] font-bold text-gray-400 tracking-wider">
+                                                {img.album_key || "Internal Photos"}
+                                            </p>
+                                            <p className="text-[8px] text-gray-300 mt-1">Unlock via chat</p>
+                                        </div>
+                                    ))}
+                                </div>
                             </div>
 
-                            {/* Actions */}
-                            <div className="flex gap-3">
-                                {primaryAction && (
-                                    <button
-                                        onClick={primaryAction.onClick}
-                                        className="flex-1 py-2.5 px-4 bg-gray-900 dark:bg-white text-white dark:text-gray-900 text-sm font-medium rounded-lg hover:bg-gray-800 dark:hover:bg-gray-100 transition-colors"
-                                    >
-                                        {primaryAction.label}
-                                    </button>
+                            {/* Owner tools / Messaging Panel integrations */}
+                            <div className="space-y-6">
+                                {property.is_mine && (
+                                    <OwnerToolsPanel
+                                        property={property}
+                                        onStatusUpdate={onStatusUpdate}
+                                        onStoryUpdate={onStoryUpdate}
+                                        onCoverUpload={onCoverUpload}
+                                    />
                                 )}
-                                {secondaryAction && (
-                                    <button
-                                        onClick={secondaryAction.onClick}
-                                        className="px-4 py-2.5 text-sm font-medium text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-800 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
-                                    >
-                                        {secondaryAction.label}
-                                    </button>
+
+                                <WaitingNotesPanel
+                                    propertyId={property.property_id}
+                                    isOwner={property.is_mine === true}
+                                    status={resolveStatus({
+                                        is_claimed: property.is_claimed, intent_flags: {
+                                            soft_listing: property.is_open_to_talking ?? null,
+                                            settled: property.is_settled ?? null,
+                                            is_for_sale: property.is_for_sale ?? null,
+                                            is_for_rent: property.is_for_rent ?? null,
+                                        }
+                                    })}
+                                    onReply={(conversationId, quotedNote, noteId, authorUserId) => {
+                                        setSelectedOwnerConversationId(conversationId);
+                                        setPendingQuotedNote(quotedNote);
+                                        setPendingNoteId(noteId);
+                                        setPendingNoteAuthorId(authorUserId);
+                                        setOwnerPanelMode("thread");
+                                        setOwnerEntryPoint("row");
+                                        setShowOwnerInbox(true);
+                                        onNoteReply?.(conversationId);
+                                    }}
+                                />
+
+                                {property.is_mine && showOwnerInbox && (
+                                    <div className="border border-gray-100 bg-white/50 backdrop-blur-sm rounded-2xl overflow-hidden h-[450px] shadow-sm">
+                                        <PropertyMessagePanel
+                                            property={property}
+                                            onClose={() => {
+                                                setShowOwnerInbox(false);
+                                                setSelectedOwnerConversationId(null);
+                                                setPendingQuotedNote(null);
+                                                setPendingNoteId(null);
+                                                setPendingNoteAuthorId(null);
+                                                setOwnerPanelMode("list");
+                                            }}
+                                            conversationId={selectedOwnerConversationId}
+                                            onSelectNeighbour={onSelectNeighbour}
+                                            mode={ownerPanelMode}
+                                            isOwnerView={true}
+                                            draftNote={pendingNoteId && pendingNoteAuthorId && pendingQuotedNote ? {
+                                                noteId: pendingNoteId,
+                                                authorUserId: pendingNoteAuthorId,
+                                                quotedNote: pendingQuotedNote,
+                                            } : null}
+                                        />
+                                    </div>
+                                )}
+
+                                {!property.is_mine && showMessagePanel && (
+                                    <div className="border border-gray-100 bg-white/50 backdrop-blur-sm rounded-2xl overflow-hidden h-[450px] shadow-sm">
+                                        <PropertyMessagePanel
+                                            property={property}
+                                            onClose={() => setShowMessagePanel(false)}
+                                            conversationId={initialConversationId}
+                                            onSelectNeighbour={onSelectNeighbour}
+                                        />
+                                    </div>
                                 )}
                             </div>
                         </div>
+                    </div>
 
-                        {/* Mini-map placeholder */}
-                        <div className="px-4 pb-4">
-                            <div className="h-32 bg-gray-100 dark:bg-gray-800 rounded-lg flex items-center justify-center">
-                                <span className="text-sm text-gray-400 dark:text-gray-500">Mini-map (coming soon)</span>
-                            </div>
+                    {/* Sticky Action Footer */}
+                    <div className="absolute bottom-0 left-0 right-0 p-4 pt-8 bg-gradient-to-t from-[#F9F7F2] via-[#F9F7F2]/95 to-transparent flex items-center justify-center pointer-events-none">
+                        <div className="w-full max-w-lg pointer-events-auto">
+                            {primaryAction && (
+                                <button
+                                    onClick={primaryAction.onClick}
+                                    className="w-full py-4 px-8 bg-[#E08E5F] hover:bg-[#D47D4C] text-white text-sm font-bold tracking-widest uppercase rounded-2xl shadow-xl shadow-amber-900/10 transition-all hover:scale-[1.02] active:scale-[0.98] flex items-center justify-center gap-3 group"
+                                >
+                                    <span>{primaryAction.label === "Message owner" ? "View Home & Message Owner" : primaryAction.label}</span>
+                                    <svg className="w-4 h-4 transition-transform group-hover:translate-x-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
+                                    </svg>
+                                </button>
+                            )}
                         </div>
                     </div>
                 </div>
             </div>
 
             {/* Lightbox */}
-            {
-                lightboxImage && (
-                    <PropertyImageLightbox
-                        src={lightboxImage.src}
-                        alt={lightboxImage.alt}
-                        onClose={() => setLightboxImage(null)}
-                    />
-                )
-            }
+            {lightboxImage && (
+                <PropertyImageLightbox
+                    src={lightboxImage.src}
+                    alt={lightboxImage.alt}
+                    onClose={() => setLightboxImage(null)}
+                />
+            )}
         </>
     );
 }

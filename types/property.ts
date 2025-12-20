@@ -21,10 +21,16 @@ export interface PropertyPublic {
     is_mine: boolean;
 
     // Image fields (nullable, backend will provide)
-    /** Cover image URL for hero display */
+    /** Cover image URL for hero display (Legacy) */
     cover_image_url?: string | null;
+    /** High-res cinematic image */
+    hero_image_url?: string | null;
+    /** Low-res thumbnail */
+    thumbnail_url?: string | null;
     /** Whether additional images exist in album */
     has_additional_images?: boolean;
+    /** Metadata JSON (vibe labels, story summary, etc) */
+    metadata?: Record<string, any> | null;
     /** Public images for Tier 2 gallery (fetched separately) */
     public_images?: PropertyImage[];
 }

@@ -1,69 +1,17 @@
 "use client";
 
-import { useEffect, useCallback, useState } from "react";
+import { useEffect, useCallback, useState, useMemo } from "react";
 import type { PropertyPublic } from "@/types/property";
 import { PropertyImage } from "./PropertyImage";
 import { getChipStyle, getPublicLabel, getPinColor } from "@/lib/statusStyles";
 import { type Status } from "@/lib/status";
+import {
+    type ProximityAnchor,
+    processProximityAnchors,
+    MAX_WALK_THRESHOLD_METERS
+} from "@/lib/proximity";
 
-// =============================================================================
-// PROXIMITY GUARD CONSTANTS
-// =============================================================================
-const WALK_SPEED_METERS_PER_MIN = 80;  // Average walking speed
-const MAX_WALK_THRESHOLD_METERS = 1200;  // 15 minutes max
 
-// Anchor categories for proximity display
-type AnchorCategory = "school" | "transport" | "amenity" | "spirit";
-
-interface ProximityAnchor {
-    id: string;
-    name: string;
-    category: AnchorCategory;
-    distance: number;  // meters
-    walkMins: number;
-}
-
-/**
- * Haversine formula to calculate distance between two coordinates in meters.
- * Accurate for short distances at any latitude.
- */
-function haversineDistance(
-    lat1: number,
-    lon1: number,
-    lat2: number,
-    lon2: number
-): number {
-    const R = 6371000; // Earth's radius in meters
-    const toRad = (deg: number) => deg * (Math.PI / 180);
-
-    const dLat = toRad(lat2 - lat1);
-    const dLon = toRad(lon2 - lon1);
-
-    const a =
-        Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-        Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
-        Math.sin(dLon / 2) * Math.sin(dLon / 2);
-
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-
-    return R * c;
-}
-
-/**
- * Map anchor_type to display category
- */
-function mapAnchorCategory(anchorType: string, subtype: string): AnchorCategory {
-    switch (anchorType) {
-        case "school":
-            return "school";
-        case "transport":
-            return "transport";
-        case "spirit":
-            return "spirit";
-        default:
-            return "amenity";
-    }
-}
 
 // =============================================================================
 // PROPERTY CARD PREVIEW (Tier 1 - S04)
@@ -89,84 +37,32 @@ export function PropertyCardPreview({
     onViewHome,
     isMobile = false,
 }: PropertyCardPreviewProps) {
-    // Proximity anchors state
-    const [proximityAnchors, setProximityAnchors] = useState<ProximityAnchor[]>([]);
+    // Proximity Guard: State for raw anchor data (cached in state)
+    const [allAnchors, setAllAnchors] = useState<any[]>([]);
 
-    // Fetch nearby anchors and calculate distances
     useEffect(() => {
-        const fetchProximityAnchors = async () => {
-            // Need property coordinates
-            if (!property.lat || !property.lon) {
-                setProximityAnchors([]);
-                return;
-            }
-
+        const fetchAllAnchors = async () => {
+            if (allAnchors.length > 0) return; // Only fetch once
             try {
-                // Fetch all anchors (filtered by bbox around property)
-                const buffer = 0.02; // ~2km buffer for bbox
-                const bbox = [
-                    property.lon - buffer,
-                    property.lat - buffer,
-                    property.lon + buffer,
-                    property.lat + buffer
-                ].join(",");
-
-                const response = await fetch(`/api/anchors?bbox=${bbox}`);
-                if (!response.ok) {
-                    setProximityAnchors([]);
-                    return;
-                }
-
+                const response = await fetch("/api/anchors");
                 const geojson = await response.json();
-                if (!geojson.features || geojson.features.length === 0) {
-                    setProximityAnchors([]);
-                    return;
+                if (geojson.features) {
+                    setAllAnchors(geojson.features);
                 }
-
-                // Calculate distances and find closest per category
-                const anchorsWithDistance = geojson.features.map((f: GeoJSON.Feature) => {
-                    const coords = (f.geometry as GeoJSON.Point).coordinates;
-                    const distance = haversineDistance(
-                        property.lat,
-                        property.lon,
-                        coords[1],
-                        coords[0]
-                    );
-                    const category = mapAnchorCategory(
-                        f.properties?.anchor_type || "",
-                        f.properties?.subtype || ""
-                    );
-                    return {
-                        id: f.properties?.id || "",
-                        name: f.properties?.name || "Unknown",
-                        category,
-                        distance,
-                        walkMins: Math.round(distance / WALK_SPEED_METERS_PER_MIN)
-                    };
-                });
-
-                // Filter to only within threshold and find closest per category
-                const withinThreshold = anchorsWithDistance.filter(
-                    (a: ProximityAnchor) => a.distance < MAX_WALK_THRESHOLD_METERS
-                );
-
-                // Get closest per category
-                const closestByCategory = new Map<AnchorCategory, ProximityAnchor>();
-                for (const anchor of withinThreshold) {
-                    const existing = closestByCategory.get(anchor.category);
-                    if (!existing || anchor.distance < existing.distance) {
-                        closestByCategory.set(anchor.category, anchor);
-                    }
-                }
-
-                setProximityAnchors(Array.from(closestByCategory.values()));
-            } catch {
-                setProximityAnchors([]);
+            } catch (err) {
+                console.error("Failed to fetch anchors for cache:", err);
             }
         };
+        fetchAllAnchors();
+    }, [allAnchors.length]);
 
-        fetchProximityAnchors();
-    }, [property.lat, property.lon]);
+    // Proximity Guard: Memoized processing (runs only when property coordinates change)
+    const proximityAnchors = useMemo(() => {
+        if (!property.lat || !property.lon || allAnchors.length === 0) {
+            return [];
+        }
+        return processProximityAnchors(allAnchors, property.lat, property.lon);
+    }, [property.lat, property.lon, allAnchors]);
 
     // Close on Escape
     useEffect(() => {

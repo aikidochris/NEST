@@ -205,3 +205,13 @@ This has been ran in supabase
 20251219_001_mvt_intent_flags.sql - this has been applied
 20251219_002_neighborhood_anchors_seed.sql - this has been applied
 20251219_003_admin_roles.sql - this has been applied
+20251219_004_mvt_status_column.sql - this has been applied
+20251219_005_error_fix.sql - this has been applied
+20251219_006_map_fix.sql - this has been applied
+20251219_007_fixes.sql - this has been applied
+20251219_008_more_fixes.sql - this has been applied
+20251219_009_filter_fix.sql - this has been applied
+20251219_010_map.sql - this has been applied
+20251220_001_fix_mvt_properties.sql - this has been applied
+20251220_002_hardened_mvt.sql - this has been applied
+20251220_003_null_safe_mvt.sql - this has been applied

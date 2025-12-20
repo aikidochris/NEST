@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useRef, useEffect, useImperativeHandle, forwardRef } from "react";
 import Map, { Source, Layer, ViewStateChangeEvent, MapRef, Marker } from "react-map-gl/maplibre";
 import type { MapLayerMouseEvent, GeoJSONSource } from "maplibre-gl";
 import maplibregl from "maplibre-gl";
@@ -24,12 +24,11 @@ const CLUSTER_RADIUS = 40;              // Cluster radius in pixels
 const CLUSTER_MAX_ZOOM = 15;            // Clusters disappear at zoom > 15
 
 // Hearth Design System Colors
-const EMBER = "#E08E5F";                // Active states: for_sale, for_rent, open_to_talking
+const EMBER = "#E08E5F";                // Intent states: for_sale, for_rent, open_to_talking
 const PAPER = "#F9F7F4";                // Background/horizon color
-const PAPER_GREY = "#D1D5DB";           // Unclaimed properties (lighter to recede)
-const OWNER_GREY = "#6B7280";           // Claimed with no active intent (settled, owner_no_status)
+const LIGHT_STONE = "#F2F2F2";          // Unclaimed properties (very light to recede)
+const INK_GREY = "#8C8C8C";             // Settled/claimed with no active intent
 const BUILDING_WARM = "#F1EFE9";        // 3D building extrusion (tone-on-tone editorial)
-const INK_GREY = "#8C8C8C";             // Anchor icons base color
 
 // Anchor visualization constants
 const ANCHOR_RADIUS_METERS = 800;       // 800m catchment radius
@@ -141,17 +140,25 @@ function safeQueryRenderedFeatures(
     }
 }
 
-export default function PropertyMap() {
+export interface PropertyMapRef {
+    refreshMapPins: () => Promise<void>;
+}
+
+const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
     const mapRef = useRef<MapRef>(null);
     const [viewState, setViewState] = useState(DEFAULT_VIEW);
     const [selectedPropertyId, setSelectedPropertyId] = useState<string | null>(null);
     const [clusterData, setClusterData] = useState<GeoJSON.FeatureCollection>(EMPTY_GEOJSON);
+    const [propertyGeoJSON, setPropertyGeoJSON] = useState<GeoJSON.FeatureCollection>(EMPTY_GEOJSON);
     const [vibeStats, setVibeStats] = useState<VibeStats | null>(null);
     const [vibeLoading, setVibeLoading] = useState(false);
     const [liveFeedEvents, setLiveFeedEvents] = useState<LiveFeedEvent[]>([]);
     const [liveFeedLoading, setLiveFeedLoading] = useState(false);
     const [vibeBarExpanded, setVibeBarExpanded] = useState(false);
     const [showMessageCentre, setShowMessageCentre] = useState(false);
+    const [activeStatusFilters, setActiveStatusFilters] = useState<string[]>(['for_sale', 'for_rent', 'open_to_talking', 'settled', 'unclaimed']);
+    const [isFilterMounted, setIsFilterMounted] = useState(false);
+    const [isFilterMobileExpanded, setIsFilterMobileExpanded] = useState(false);
     const [pendingOpenMode, setPendingOpenMode] = useState<"card" | "messages">("card");
     const [pendingConversationId, setPendingConversationId] = useState<string | null>(null);
     const [viewMode, setViewMode] = useState<"paper" | "blueprint" | "satellite">("paper");
@@ -185,13 +192,61 @@ export default function PropertyMap() {
     // Tiered Anchor Filter: Foundational, Practical, Spirit
     const [anchorTierFilter, setAnchorTierFilter] = useState<'all' | 'foundational' | 'practical' | 'spirit'>('all');
 
+    // Entrance animation for filter bar
+    useEffect(() => {
+        const timer = setTimeout(() => setIsFilterMounted(true), 100);
+        return () => clearTimeout(timer);
+    }, []);
+
+    // Surgical Map Filter Integration
+    useEffect(() => {
+        const map = mapRef.current?.getMap();
+        if (!map) return;
+
+        const applyFilters = () => {
+            const layersToFilter = [
+                'hearth-pins',
+                'hearth-glyphs',
+                'property-points'
+                // STRICT ISOLATION: 'building-glow' and 'hearth-pulse' excluded
+                // These layers use hardcoded 'has_active_intent' filter from MVT
+            ];
+
+            // Surgical Filter Logic using 'in' expression for status matching
+            // Logical Fallback: If all filters off, default to showing 'unclaimed' to prevent empty map
+            const effectiveFilters = activeStatusFilters.length === 0 ? ['unclaimed'] : activeStatusFilters;
+            const statusFilter = ['in', ['get', 'status'], ['literal', effectiveFilters]];
+
+            layersToFilter.forEach(layerId => {
+                if (map.getLayer(layerId)) {
+                    map.setFilter(layerId, statusFilter as any);
+                }
+            });
+        };
+
+        // Apply immediately or wait for load if needed
+        if (map.isStyleLoaded()) {
+            applyFilters();
+        } else {
+            map.once('style.load', applyFilters);
+        }
+    }, [activeStatusFilters]);
+
+    const toggleStatusFilter = (filter: string) => {
+        setActiveStatusFilters(prev =>
+            prev.includes(filter)
+                ? prev.filter(f => f !== filter)
+                : [...prev, filter]
+        );
+    };
+
+    const clearStatusFilters = () => setActiveStatusFilters([]);
+    const selectAllFilters = () => setActiveStatusFilters(['for_sale', 'for_rent', 'open_to_talking', 'settled', 'unclaimed']);
+
     // Fetch cluster data (GeoJSON for clustering at low zoom)
     const fetchClusterData = useCallback(async (bbox: BBox, zoom: number) => {
-        // Only fetch for clustering at low zoom
-        if (zoom > CLUSTER_MAX_ZOOM) {
-            setClusterData(EMPTY_GEOJSON);
-            return;
-        }
+        // High zoom: Fetch GeoJSON for the 'properties-source' (instant updates)
+        const isHighZoom = zoom > CLUSTER_MAX_ZOOM;
 
         if (clusterAbortRef.current) {
             clusterAbortRef.current.abort();
@@ -207,18 +262,20 @@ export default function PropertyMap() {
             });
 
             if (!response.ok) {
-                setClusterData(EMPTY_GEOJSON);
+                if (isHighZoom) setPropertyGeoJSON(EMPTY_GEOJSON);
+                else setClusterData(EMPTY_GEOJSON);
                 return;
             }
 
             const json = await response.json();
             if (!json.ok || !json.data) {
-                setClusterData(EMPTY_GEOJSON);
+                if (isHighZoom) setPropertyGeoJSON(EMPTY_GEOJSON);
+                else setClusterData(EMPTY_GEOJSON);
                 return;
             }
 
             // Convert to GeoJSON
-            const features = json.data.map((p: { property_id: string; lon: number; lat: number; is_claimed: boolean }) => ({
+            const features = json.data.map((p: any) => ({
                 type: "Feature" as const,
                 geometry: {
                     type: "Point" as const,
@@ -227,15 +284,41 @@ export default function PropertyMap() {
                 properties: {
                     property_id: p.property_id,
                     is_claimed: p.is_claimed,
+                    status: p.status || (p.is_claimed ? 'settled' : 'unclaimed'),
+                    is_for_sale: p.is_for_sale,
+                    is_for_rent: p.is_for_rent,
+                    is_open_to_talking: p.is_open_to_talking,
+                    is_settled: p.is_settled,
+                    // GLOW GUARD: Hardened boolean for building-glow and hearth-pulse layers
+                    has_active_intent: p.is_for_sale || p.is_for_rent || p.is_open_to_talking,
                 },
             }));
 
-            setClusterData({ type: "FeatureCollection", features });
+            const geojson: GeoJSON.FeatureCollection = { type: "FeatureCollection", features };
+
+            if (isHighZoom) {
+                setPropertyGeoJSON(geojson);
+            } else {
+                setClusterData(geojson);
+            }
         } catch (err) {
             if (err instanceof Error && err.name === "AbortError") return;
+            setPropertyGeoJSON(EMPTY_GEOJSON);
             setClusterData(EMPTY_GEOJSON);
         }
-    }, []);
+    }, [setPropertyGeoJSON, setClusterData]);
+
+    // Expose Refresh Bridge to parents (e.g. HomeClient)
+    useImperativeHandle(ref, () => ({
+        refreshMapPins: async () => {
+            const bounds = mapRef.current?.getMap().getBounds();
+            const zoom = mapRef.current?.getMap().getZoom();
+            if (bounds && zoom !== undefined) {
+                const bbox = computeBBox(bounds);
+                await fetchClusterData(bbox, zoom);
+            }
+        }
+    }), [fetchClusterData]);
 
     // Fetch vibe stats for area
     const fetchVibeStats = useCallback(async (bbox: BBox) => {
@@ -454,30 +537,28 @@ export default function PropertyMap() {
             // Image Bank: Custom Hearth Anchor Icons
             // Load minimalist SVG icons into map sprite for anchor visualization
             const hearthIcons: Record<string, string> = {
-                // School: Minimalist graduation cap
                 "hearth-school": `data:image/svg+xml;base64,${btoa(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="24" height="24"><path d="M12 3L1 9l4 2.18v6L12 21l7-3.82v-6l2-1.09V17h2V9L12 3zm6.82 6L12 12.72 5.18 9 12 5.28 18.82 9zM17 15.99l-5 2.73-5-2.73v-3.72L12 15l5-2.73v3.72z"/></svg>`)}`,
-                // Rail: Minimalist train
                 "hearth-rail": `data:image/svg+xml;base64,${btoa(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="24" height="24"><path d="M12 2c-4 0-8 .5-8 4v9.5C4 17.43 5.57 19 7.5 19L6 20.5v.5h2.23l2-2H14l2 2h2v-.5L16.5 19c1.93 0 3.5-1.57 3.5-3.5V6c0-3.5-3.58-4-8-4zM7.5 17c-.83 0-1.5-.67-1.5-1.5S6.67 14 7.5 14s1.5.67 1.5 1.5S8.33 17 7.5 17zm3.5-7H6V6h5v4zm2 0V6h5v4h-5zm3.5 7c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5z"/></svg>`)}`,
-                // Park: Minimalist tree
                 "hearth-park": `data:image/svg+xml;base64,${btoa(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="24" height="24"><path d="M17 12h2L12 2 5 12h2l-3 8h7v2h2v-2h7l-3-8zm-5-6.5l4.3 5.5H13v3h-2v-3H7.7L12 5.5z"/></svg>`)}`,
-                // Coastal: Minimalist wave
                 "hearth-coastal": `data:image/svg+xml;base64,${btoa(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="24" height="24"><path d="M21 17c-1.1 0-2-.9-2-2 0 1.1-.9 2-2 2s-2-.9-2-2c0 1.1-.9 2-2 2s-2-.9-2-2c0 1.1-.9 2-2 2s-2-.9-2-2c0 1.1-.9 2-2 2v2c1.1 0 2-.9 2-2 0 1.1.9 2 2 2s2-.9 2-2c0 1.1.9 2 2 2s2-.9 2-2c0 1.1.9 2 2 2s2-.9 2-2c0 1.1.9 2 2 2v-2zm0-4c-1.1 0-2-.9-2-2 0 1.1-.9 2-2 2s-2-.9-2-2c0 1.1-.9 2-2 2s-2-.9-2-2c0 1.1-.9 2-2 2s-2-.9-2-2c0 1.1-.9 2-2 2v2c1.1 0 2-.9 2-2 0 1.1.9 2 2 2s2-.9 2-2c0 1.1.9 2 2 2s2-.9 2-2c0 1.1.9 2 2 2s2-.9 2-2c0 1.1.9 2 2 2v-2z"/></svg>`)}`,
-                // Village: Minimalist buildings
                 "hearth-village": `data:image/svg+xml;base64,${btoa(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="24" height="24"><path d="M15 11V5l-3-3-3 3v2H3v14h18V11h-6zm-8 8H5v-2h2v2zm0-4H5v-2h2v2zm0-4H5V9h2v2zm6 8h-2v-2h2v2zm0-4h-2v-2h2v2zm0-4h-2V9h2v2zm0-4h-2V5h2v2zm6 12h-2v-2h2v2zm0-4h-2v-2h2v2z"/></svg>`)}`,
-                // Health: Medical plus/cross
                 "hearth-health": `data:image/svg+xml;base64,${btoa(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="24" height="24"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-2 10h-4v4h-2v-4H7v-2h4V7h2v4h4v2z"/></svg>`)}`,
-                // Shop: Shopping bag
                 "hearth-shop": `data:image/svg+xml;base64,${btoa(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="24" height="24"><path d="M18 6h-2c0-2.21-1.79-4-4-4S8 3.79 8 6H6c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm-6-2c1.1 0 2 .9 2 2h-4c0-1.1.9-2 2-2zm6 16H6V8h2v2c0 .55.45 1 1 1s1-.45 1-1V8h4v2c0 .55.45 1 1 1s1-.45 1-1V8h2v12z"/></svg>`)}`
             };
 
-            // Load all icons into map sprite
+            // Use Image() constructor for reliable data URI loading (fixes InvalidStateError)
             Object.entries(hearthIcons).forEach(([id, dataUri]) => {
                 const img = new Image(24, 24);
                 img.onload = () => {
                     if (!map.hasImage(id)) {
-                        map.addImage(id, img, { sdf: true }); // SDF enables dynamic coloring
+                        try {
+                            map.addImage(id, img, { sdf: true });
+                        } catch (e) {
+                            console.warn(`Failed to add image: ${id}`, e);
+                        }
                     }
                 };
+                img.onerror = (e) => console.warn(`Failed to load icon: ${id}`, e);
                 img.src = dataUri;
             });
 
@@ -692,98 +773,109 @@ export default function PropertyMap() {
     // Handle map click - cluster zoom or property select
     const handleMapClick = useCallback(
         async (evt: MapLayerMouseEvent) => {
-            const features = evt.features;
-            if (!features || features.length === 0) return;
+            try {
+                const features = evt.features;
+                if (!features || features.length === 0) return;
 
-            // Check for anchor icon click first
-            const anchorFeature = features.find((f) => f.layer?.id === "anchor-icons");
-            if (anchorFeature) {
-                const anchorId = anchorFeature.properties?.id;
-                if (anchorId) {
-                    handleAnchorClick(anchorId);
-                    return;
+                // DEFINITIVE CLUSTER GUARD: Prevent MapLibre decoder from reading cluster metadata
+                const firstFeature = features[0];
+                if (firstFeature.source?.includes('cluster') || firstFeature.properties?.cluster) return;
+
+                // Check for anchor icon click first
+                const anchorFeature = features.find((f) => f.layer?.id === "anchor-icons");
+                if (anchorFeature) {
+                    const anchorId = anchorFeature.properties?.id;
+                    if (anchorId) {
+                        handleAnchorClick(anchorId);
+                        return;
+                    }
                 }
-            }
 
-            // Check for cluster click first
-            const clusterFeature = features.find((f) => f.layer?.id === "clusters");
-            if (clusterFeature && clusterFeature.properties?.cluster_id !== undefined) {
-                const map = mapRef.current?.getMap();
-                if (!map) return;
+                // Check for cluster click first
+                const clusterFeature = features.find((f) => f.layer?.id === "clusters");
+                if (clusterFeature && clusterFeature.properties?.cluster_id !== undefined) {
+                    const map = mapRef.current?.getMap();
+                    if (!map) return;
 
-                const source = map.getSource("cluster-source") as GeoJSONSource;
-                if (!source) return;
+                    const source = map.getSource("cluster-source") as GeoJSONSource;
+                    if (!source) return;
 
-                try {
-                    const clusterId = clusterFeature.properties.cluster_id;
-                    const pointCount = clusterFeature.properties.point_count || 0;
-                    const currentZoom = map.getZoom();
-                    const zoom = await source.getClusterExpansionZoom(clusterId);
-                    const geometry = clusterFeature.geometry as GeoJSON.Point;
+                    try {
+                        const clusterId = clusterFeature.properties.cluster_id;
+                        const pointCount = clusterFeature.properties.point_count || 0;
+                        const currentZoom = map.getZoom();
+                        const zoom = await source.getClusterExpansionZoom(clusterId);
+                        const geometry = clusterFeature.geometry as GeoJSON.Point;
 
-                    // Inspection mode logging
-                    inspectLog("CLUSTER_CLICK", {
-                        cluster_id: clusterId,
-                        point_count: pointCount,
-                        current_zoom: currentZoom,
-                        expansion_zoom: zoom,
-                    });
+                        // Inspection mode logging
+                        inspectLog("CLUSTER_CLICK", {
+                            cluster_id: clusterId,
+                            point_count: pointCount,
+                            current_zoom: currentZoom,
+                            expansion_zoom: zoom,
+                        });
 
-                    map.easeTo({
-                        center: geometry.coordinates as [number, number],
-                        zoom: zoom,
-                        duration: 500,
-                    });
-                } catch {
-                    // Ignore cluster zoom errors
+                        map.easeTo({
+                            center: geometry.coordinates as [number, number],
+                            zoom: zoom,
+                            duration: 500,
+                        });
+                    } catch {
+                        // Ignore cluster zoom errors
+                    }
+                    return; // Don't open sheet for cluster click
                 }
-                return; // Don't open sheet for cluster click
-            }
 
-            // Individual property click - use feature properties directly from tiles
-            const hearthFeature = features.find((f) => f.layer?.id === "hearth-pins");
-            const baseFeature = features.find((f) => f.layer?.id === "property-points");
-            const unclusteredFeature = features.find((f) => f.layer?.id === "unclustered-point");
+                // Individual property click - use feature properties directly from tiles
+                const hearthFeature = features.find((f) => f.layer?.id === "hearth-pins");
+                const baseFeature = features.find((f) => f.layer?.id === "property-points");
+                const unclusteredFeature = features.find((f) => f.layer?.id === "unclustered-point");
 
-            const feature = hearthFeature || baseFeature || unclusteredFeature;
-            if (!feature) return;
+                const feature = hearthFeature || baseFeature || unclusteredFeature;
+                if (!feature) return;
 
-            const propertyId = feature.properties?.property_id;
-            if (propertyId) {
-                // Build intent flags from feature properties (tiles now include all flags)
-                const props = feature.properties ?? {};
-                const source_layer = feature.layer?.id;
+                const propertyId = feature.properties?.property_id;
+                // Crash Prevention: Ignore features without valid status
+                if (!feature.properties?.status) return;
+                if (propertyId) {
+                    // Build intent flags from feature properties (tiles now include all flags)
+                    const props = feature.properties ?? {};
+                    const source_layer = feature.layer?.id;
 
-                // Read directly from tile properties
-                const is_claimed = typeof props.is_claimed === "boolean" ? props.is_claimed : null;
-                const intent_flags = {
-                    soft_listing: props.is_open_to_talking ?? null,
-                    settled: props.is_settled ?? null,
-                    is_for_sale: props.is_for_sale ?? null,
-                    is_for_rent: props.is_for_rent ?? null,
-                };
+                    // Read directly from tile properties
+                    const is_claimed = typeof props.is_claimed === "boolean" ? props.is_claimed : null;
+                    const intent_flags = {
+                        soft_listing: props.is_open_to_talking ?? null,
+                        settled: props.is_settled ?? null,
+                        is_for_sale: props.is_for_sale ?? null,
+                        is_for_rent: props.is_for_rent ?? null,
+                    };
 
-                // Inspection mode logging for property click
-                inspectLog("PROPERTY_OPEN", {
-                    property_id: propertyId,
-                    is_claimed,
-                    display_label: props.display_label ?? null,
-                    source_layer,
-                    intent_flags,
-                    resolved_status: resolveStatus({
+                    // Inspection mode logging for property click
+                    inspectLog("PROPERTY_OPEN", {
+                        property_id: propertyId,
                         is_claimed,
-                        intent_flags: {
-                            soft_listing: intent_flags.soft_listing === true,
-                            settled: intent_flags.settled === true,
-                            is_for_sale: intent_flags.is_for_sale === true,
-                            is_for_rent: intent_flags.is_for_rent === true,
-                        },
-                    }),
-                });
-                // Clear pending conversation state for direct map clicks
-                setPendingOpenMode("card");
-                setPendingConversationId(null);
-                setSelectedPropertyId(propertyId);
+                        display_label: props.display_label ?? null,
+                        source_layer,
+                        intent_flags,
+                        resolved_status: resolveStatus({
+                            is_claimed,
+                            intent_flags: {
+                                soft_listing: intent_flags.soft_listing === true,
+                                settled: intent_flags.settled === true,
+                                is_for_sale: intent_flags.is_for_sale === true,
+                                is_for_rent: intent_flags.is_for_rent === true,
+                            },
+                        }),
+                    });
+                    // Clear pending conversation state for direct map clicks
+                    setPendingOpenMode("card");
+                    setPendingConversationId(null);
+                    setSelectedPropertyId(propertyId);
+                }
+            } catch (e) {
+                // Crash Prevention: Silently ignore decoder errors from malformed features
+                console.debug('handleMapClick error:', e);
             }
         },
         []
@@ -944,7 +1036,9 @@ export default function PropertyMap() {
 
         const clusterSource = map.getSource("cluster-source") as GeoJSONSource | undefined;
         if (clusterSource) clusterSource.setData(clusterData);
-    }, [clusterData]);
+        const propertySource = map.getSource("properties-source") as GeoJSONSource | undefined;
+        if (propertySource) propertySource.setData(propertyGeoJSON);
+    }, [clusterData, propertyGeoJSON]);
 
     // Show clusters layer only at low zoom
     const showClusters = viewState.zoom <= CLUSTER_MAX_ZOOM;
@@ -969,6 +1063,37 @@ export default function PropertyMap() {
                     onMoveEnd={handleMoveEnd}
                     onLoad={handleLoad}
                     onClick={handleMapClick}
+                    onMouseMove={(e) => {
+                        const map = mapRef.current?.getMap();
+                        if (!map) return;
+
+                        // Null-Safe MVT is now live - tiles are sanitized with COALESCE for all nullable fields
+                        const targetLayers = ['hearth-pins', 'property-points', 'clusters', 'unclustered-point', 'anchor-icons'];
+                        const interactableLayers = targetLayers.filter(id => map.getLayer(id));
+
+                        if (interactableLayers.length === 0) return;
+
+                        try {
+                            const features = map.queryRenderedFeatures(e.point, {
+                                layers: interactableLayers
+                            });
+
+                            if (!features || features.length === 0) {
+                                map.getCanvas().style.cursor = '';
+                                return;
+                            }
+
+                            // Change cursor to pointer if we hit something
+                            map.getCanvas().style.cursor = 'pointer';
+
+                            // Skip cluster features for further processing
+                            const topFeature = features[0];
+                            if (topFeature.source?.includes('cluster') || topFeature.properties?.cluster) return;
+                        } catch (err) {
+                            // Fallback: Prevent PBF decoder exceptions from crashing the React runtime
+                            map.getCanvas().style.cursor = '';
+                        }
+                    }}
                     interactiveLayerIds={["property-points", "clusters", "unclustered-point", "hearth-pins", "anchor-icons"]}
                     style={{ width: "100%", height: "100%" }}
                     mapStyle={MAP_STYLE}
@@ -990,26 +1115,15 @@ export default function PropertyMap() {
                     )}
 
 
-                    {/* Vector tile source with GPU-native Hearth pin layers */}
-                    <Source
-                        id="properties-vt"
-                        type="vector"
-                        tiles={[`${typeof window !== "undefined" ? window.location.origin : ""}/api/tiles/properties/{z}/{x}/{y}`]}
-                        minzoom={0}
-                        maxzoom={14}
-                    >
-                        {/* Hearth Halo - Building Glow Layer (Internal Light effect) */}
-                        {/* Creates EMBER glow beneath active houses - workaround since we can't color 3D buildings */}
+                    {/* GeoJSON-native Property Pins - For Instant UI Echo (Surgical Updates) */}
+                    <Source id="properties-source" type="geojson" data={propertyGeoJSON}>
+                        {/* Hearth Halo - Building Glow Layer */}
                         <Layer
                             id="building-glow"
                             type="circle"
-                            source-layer="properties"
                             minzoom={CLUSTER_MAX_ZOOM}
                             filter={[
-                                "any",
-                                ["==", ["get", "is_open_to_talking"], true],
-                                ["==", ["get", "is_for_sale"], true],
-                                ["==", ["get", "is_for_rent"], true]
+                                "==", ["get", "has_active_intent"], true
                             ]}
                             paint={{
                                 "circle-color": EMBER,
@@ -1024,49 +1138,47 @@ export default function PropertyMap() {
                             }}
                         />
 
-                        {/* Base Pin Layer - GPU expression for instant status colors */}
+                        {/* Base Pin Layer - Data-driven Visual Affirmation */}
                         <Layer
                             id="hearth-pins"
                             type="circle"
-                            source-layer="properties"
                             minzoom={CLUSTER_MAX_ZOOM}
                             paint={{
-                                // Hearth color expression: EMBER for active, GREY for others
-                                // Priority: for_sale > for_rent > open_to_talking > settled > claimed > unclaimed
+                                // 5-State Semantic Colors: Ember for Intent, Ink-Grey for Settled, Light Stone for Unclaimed
                                 "circle-color": [
-                                    "case",
-                                    ["==", ["get", "is_for_sale"], true], EMBER,
-                                    ["==", ["get", "is_for_rent"], true], EMBER,
-                                    ["==", ["get", "is_open_to_talking"], true], EMBER,
-                                    ["==", ["get", "is_settled"], true], OWNER_GREY,
-                                    ["==", ["get", "is_claimed"], true], OWNER_GREY,
-                                    PAPER_GREY  // default: unclaimed
+                                    "match",
+                                    ["get", "status"],
+                                    "for_sale", EMBER,
+                                    "for_rent", EMBER,
+                                    "open_to_talking", EMBER,
+                                    "settled", INK_GREY,
+                                    // PIN VISIBILITY FIX: Use standard grey instead of invisible LIGHT_STONE
+                                    "unclaimed", "#9CA3AF",
+                                    "#9CA3AF" // fallback
                                 ],
                                 "circle-radius": 4,
                                 "circle-opacity": [
-                                    "case",
-                                    ["==", ["get", "is_for_sale"], true], 1,
-                                    ["==", ["get", "is_for_rent"], true], 1,
-                                    ["==", ["get", "is_open_to_talking"], true], 1,
-                                    ["==", ["get", "is_settled"], true], 0.7,
-                                    ["==", ["get", "is_claimed"], true], 0.7,
-                                    0.35  // unclaimed: subtle
+                                    "match",
+                                    ["get", "status"],
+                                    "for_sale", 1,
+                                    "for_rent", 1,
+                                    "open_to_talking", 1,
+                                    "settled", 0.8,
+                                    // VISIBILITY FIX: Slightly higher opacity for improved legibility
+                                    "unclaimed", 0.6,
+                                    0.6
                                 ],
                                 "circle-stroke-width": 0,
                             }}
                         />
 
-                        {/* Living Pin Pulse Layer - Ember glow for active properties */}
+                        {/* Living Pin Pulse Layer */}
                         <Layer
                             id="hearth-pulse"
                             type="circle"
-                            source-layer="properties"
                             minzoom={CLUSTER_MAX_ZOOM}
                             filter={[
-                                "any",
-                                ["==", ["get", "is_for_sale"], true],
-                                ["==", ["get", "is_for_rent"], true],
-                                ["==", ["get", "is_open_to_talking"], true]
+                                "==", ["get", "has_active_intent"], true
                             ]}
                             paint={{
                                 "circle-color": EMBER,
@@ -1079,11 +1191,10 @@ export default function PropertyMap() {
                             }}
                         />
 
-                        {/* Hearth Glyphs - GPU-native status symbols */}
+                        {/* Hearth Glyphs */}
                         <Layer
                             id="hearth-glyphs"
                             type="symbol"
-                            source-layer="properties"
                             minzoom={CLUSTER_MAX_ZOOM}
                             filter={[
                                 "any",
@@ -1093,10 +1204,11 @@ export default function PropertyMap() {
                             ]}
                             layout={{
                                 "text-field": [
-                                    "case",
-                                    ["==", ["get", "is_for_sale"], true], "£",
-                                    ["==", ["get", "is_for_rent"], true], "r",
-                                    ["==", ["get", "is_open_to_talking"], true], "+",
+                                    "match",
+                                    ["get", "status"],
+                                    "for_sale", "£",
+                                    "for_rent", "r",
+                                    "open_to_talking", "+",
                                     ""
                                 ],
                                 "text-font": ["Open Sans Bold"],
@@ -1113,11 +1225,10 @@ export default function PropertyMap() {
                             }}
                         />
 
-                        {/* Hidden sensor layer - for queryable property clicks */}
+                        {/* Hidden sensor layer */}
                         <Layer
                             id="property-points"
                             type="circle"
-                            source-layer="properties"
                             minzoom={CLUSTER_MAX_ZOOM}
                             paint={{
                                 "circle-color": "#000000",
@@ -1127,6 +1238,8 @@ export default function PropertyMap() {
                             }}
                         />
                     </Source>
+
+
 
                     {/* GeoJSON source with clustering (visible at low zoom) */}
                     {showClusters && (
@@ -1342,22 +1455,110 @@ export default function PropertyMap() {
 
                 </Map>
 
-                {/* Top Filter Bar */}
-                <div className="absolute top-4 left-1/2 -translate-x-1/2 flex items-center bg-[#F9F7F4]/90 backdrop-blur-md rounded-full px-1.5 py-1.5 shadow-lg border border-gray-200/50 z-10">
-                    <div className="flex items-center gap-1">
-                        <button className="px-4 py-1.5 rounded-full text-sm font-medium transition-all bg-ember text-white shadow-sm">
-                            All
-                        </button>
-                        <button className="px-4 py-1.5 rounded-full text-sm font-medium transition-all text-gray-600 hover:bg-gray-100">
-                            Open to Chat
-                        </button>
-                        <button className="px-4 py-1.5 rounded-full text-sm font-medium transition-all text-gray-600 hover:bg-gray-100">
-                            For Sale
-                        </button>
-                        <div className="w-px h-4 bg-gray-200 mx-1" />
-                        <button className="px-4 py-1.5 rounded-full text-sm font-medium transition-all text-gray-600 hover:bg-gray-100">
-                            Unclaimed
-                        </button>
+                {/* Floating Map Filter Bar - Clinical Discovery Experience */}
+                <div
+                    className={`absolute top-4 left-1/2 -translate-x-1/2 z-20 transition-all duration-700 ease-out transform pointer-events-none 
+                    ${isFilterMounted ? 'translate-y-0 opacity-100' : '-translate-y-8 opacity-0'}`}
+                >
+                    <div className="flex flex-col items-center gap-2">
+                        <div className="flex items-center bg-[#F9F7F2]/95 backdrop-blur-[24px] border border-[#1B1B1B]/10 rounded-full px-2 py-2 shadow-[0_10px_40px_-15px_rgba(0,0,0,0.1)] pointer-events-auto">
+                            {/* Mobile Toggle Trigger */}
+                            <button
+                                onClick={() => setIsFilterMobileExpanded(!isFilterMobileExpanded)}
+                                className="md:hidden flex items-center gap-2 px-4 py-1.5 rounded-full text-xs font-bold uppercase tracking-widest text-gray-500 hover:bg-gray-100/50"
+                            >
+                                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
+                                </svg>
+                                <span>Filter</span>
+                            </button>
+
+                            {/* Desktop/Expanded Filters */}
+                            <div className={`${isFilterMobileExpanded ? 'flex flex-col' : 'hidden'} md:flex items-center gap-1.5 px-1`}>
+                                {/* For Sale Toggle */}
+                                <button
+                                    onClick={() => toggleStatusFilter('for_sale')}
+                                    className={`px-4 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-[0.2em] transition-all duration-300 transform active:scale-95 ${activeStatusFilters.includes('for_sale')
+                                        ? 'bg-[#E08E5F] text-white shadow-lg'
+                                        : 'bg-white/40 text-gray-400 hover:bg-white/70'
+                                        }`}
+                                >
+                                    For Sale
+                                </button>
+
+                                {/* For Rent Toggle */}
+                                <button
+                                    onClick={() => toggleStatusFilter('for_rent')}
+                                    className={`px-4 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-[0.2em] transition-all duration-300 transform active:scale-95 ${activeStatusFilters.includes('for_rent')
+                                        ? 'bg-[#8C8C8C] text-white shadow-md'
+                                        : 'bg-white/40 text-gray-400 hover:bg-white/70'
+                                        }`}
+                                >
+                                    For Rent
+                                </button>
+
+                                {/* Open to Talking (Spirit) Toggle */}
+                                <button
+                                    onClick={() => toggleStatusFilter('open_to_talking')}
+                                    className={`relative px-4 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-[0.2em] transition-all duration-500 transform active:scale-95 overflow-hidden ${activeStatusFilters.includes('open_to_talking')
+                                        ? 'bg-white text-[#E08E5F] shadow-lg ring-1 ring-[#E08E5F]/20'
+                                        : 'bg-white/40 text-gray-400 hover:bg-white/70'
+                                        }`}
+                                >
+                                    {activeStatusFilters.includes('open_to_talking') && (
+                                        <span className="absolute inset-0 bg-[#E08E5F]/5 animate-pulse" />
+                                    )}
+                                    <span className="relative z-10">Open to Talking</span>
+                                    {activeStatusFilters.includes('open_to_talking') && (
+                                        <div className="absolute inset-0 rounded-full ring-1 ring-[#E08E5F]/30 animate-pulse pointer-events-none" />
+                                    )}
+                                </button>
+
+                                {/* Separator */}
+                                <div className="w-px h-4 bg-gray-200/60 mx-1" />
+
+                                {/* Settled Toggle */}
+                                <button
+                                    onClick={() => toggleStatusFilter('settled')}
+                                    className={`px-4 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-[0.2em] transition-all duration-300 transform active:scale-95 ${activeStatusFilters.includes('settled')
+                                        ? 'bg-[#4A4A4A] text-white shadow-md'
+                                        : 'bg-white/40 text-gray-400 hover:bg-white/70'
+                                        }`}
+                                >
+                                    Settled
+                                </button>
+
+                                {/* Unclaimed Toggle */}
+                                <button
+                                    onClick={() => toggleStatusFilter('unclaimed')}
+                                    className={`px-4 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-[0.2em] transition-all duration-300 transform active:scale-95 ${activeStatusFilters.includes('unclaimed')
+                                        ? 'bg-[#D4D0C8] text-gray-700 shadow-md'
+                                        : 'bg-white/40 text-gray-400 hover:bg-white/70'
+                                        }`}
+                                >
+                                    Unclaimed
+                                </button>
+
+                                {/* Separator & Control Buttons */}
+                                <div className="w-px h-4 bg-gray-200/60 mx-1" />
+
+                                {/* All Button */}
+                                <button
+                                    onClick={selectAllFilters}
+                                    className="px-3 py-1.5 rounded-full text-[9px] font-bold uppercase tracking-widest text-gray-500 hover:bg-gray-100/50 transition-colors"
+                                >
+                                    All
+                                </button>
+
+                                {/* Clear Button */}
+                                <button
+                                    onClick={clearStatusFilters}
+                                    className="px-3 py-1.5 rounded-full text-[9px] font-bold uppercase tracking-widest text-[#E08E5F] hover:bg-[#E08E5F]/10 transition-colors"
+                                >
+                                    Clear
+                                </button>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
@@ -1468,6 +1669,14 @@ export default function PropertyMap() {
                         propertyId={selectedPropertyId}
                         onClose={handleCloseSheet}
                         onClaimSuccess={handleClaimSuccess}
+                        onRefreshPins={async () => {
+                            const map = mapRef.current?.getMap();
+                            const zoom = map?.getZoom();
+                            const bounds = map?.getBounds();
+                            if (bounds && zoom !== undefined) {
+                                await fetchClusterData(computeBBox(bounds), zoom);
+                            }
+                        }}
                         initialOpenMode={pendingOpenMode}
                         initialConversationId={pendingConversationId}
                         onSelectNeighbour={(neighbourId, lat, lon) => {
@@ -1500,5 +1709,7 @@ export default function PropertyMap() {
             </div>
         </MapIntentProvider>
     );
-}
+});
+
+export default PropertyMap;
 
