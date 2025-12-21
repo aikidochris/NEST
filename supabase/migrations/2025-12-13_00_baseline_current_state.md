@@ -215,3 +215,6 @@ This has been ran in supabase
 20251220_001_fix_mvt_properties.sql - this has been applied
 20251220_002_hardened_mvt.sql - this has been applied
 20251220_003_null_safe_mvt.sql - this has been applied
+20251220_004_heatmap_weightings.sql - this has been applied
+20251220_005_heatmap_weightings_2.sql - this has been applied
+20251221_001_heatmap_weightings_3.sql - this has been applied

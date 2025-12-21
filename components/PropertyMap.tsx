@@ -18,11 +18,6 @@ import { MapIntentProvider, type FlyToOptions, type OpenPropertyOptions } from "
 // =============================================================================
 // DESIGN KNOBS - Configurable constants
 // =============================================================================
-const CLUSTER_COLOR = "#64748b";        // Muted Nest blue/slate
-const CLUSTER_TEXT_COLOR = "#ffffff";   // White numeric label
-const CLUSTER_RADIUS = 40;              // Cluster radius in pixels
-const CLUSTER_MAX_ZOOM = 15;            // Clusters disappear at zoom > 15
-
 // Hearth Design System Colors
 const EMBER = "#E08E5F";                // Intent states: for_sale, for_rent, open_to_talking
 const PAPER = "#F9F7F4";                // Background/horizon color
@@ -44,8 +39,13 @@ const DEFAULT_VIEW = {
     latitude: 55.05,
     zoom: 12,
 };
-const DEBOUNCE_MS = 0;                  // 0ms for initial load (instant clusters)
-// Intent flags now come directly from MVT tiles - no overlay API needed
+const DEBOUNCE_MS = 200; // Debounce for Vibe Stats
+
+// Tile URL must be absolute to prevent MapLibre parsing errors in some contexts
+const getTileUrl = () => {
+    if (typeof window === "undefined") return ""; // SSR safety
+    return `${window.location.origin}/api/tiles/properties/{z}/{x}/{y}`;
+};
 
 // Empty GeoJSON for initial state
 const EMPTY_GEOJSON: GeoJSON.FeatureCollection = {
@@ -243,82 +243,18 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
     const clearStatusFilters = () => setActiveStatusFilters([]);
     const selectAllFilters = () => setActiveStatusFilters(['for_sale', 'for_rent', 'open_to_talking', 'settled', 'unclaimed']);
 
-    // Fetch cluster data (GeoJSON for clustering at low zoom)
-    const fetchClusterData = useCallback(async (bbox: BBox, zoom: number) => {
-        // High zoom: Fetch GeoJSON for the 'properties-source' (instant updates)
-        const isHighZoom = zoom > CLUSTER_MAX_ZOOM;
-
-        if (clusterAbortRef.current) {
-            clusterAbortRef.current.abort();
-        }
-
-        const controller = new AbortController();
-        clusterAbortRef.current = controller;
-
-        try {
-            const bboxParam = `${bbox.minLon},${bbox.minLat},${bbox.maxLon},${bbox.maxLat}`;
-            const response = await fetch(`/api/properties?bbox=${bboxParam}&z=${Math.round(zoom)}`, {
-                signal: controller.signal,
-            });
-
-            if (!response.ok) {
-                if (isHighZoom) setPropertyGeoJSON(EMPTY_GEOJSON);
-                else setClusterData(EMPTY_GEOJSON);
-                return;
-            }
-
-            const json = await response.json();
-            if (!json.ok || !json.data) {
-                if (isHighZoom) setPropertyGeoJSON(EMPTY_GEOJSON);
-                else setClusterData(EMPTY_GEOJSON);
-                return;
-            }
-
-            // Convert to GeoJSON
-            const features = json.data.map((p: any) => ({
-                type: "Feature" as const,
-                geometry: {
-                    type: "Point" as const,
-                    coordinates: [p.lon, p.lat],
-                },
-                properties: {
-                    property_id: p.property_id,
-                    is_claimed: p.is_claimed,
-                    status: p.status || (p.is_claimed ? 'settled' : 'unclaimed'),
-                    is_for_sale: p.is_for_sale,
-                    is_for_rent: p.is_for_rent,
-                    is_open_to_talking: p.is_open_to_talking,
-                    is_settled: p.is_settled,
-                    // GLOW GUARD: Hardened boolean for building-glow and hearth-pulse layers
-                    has_active_intent: p.is_for_sale || p.is_for_rent || p.is_open_to_talking,
-                },
-            }));
-
-            const geojson: GeoJSON.FeatureCollection = { type: "FeatureCollection", features };
-
-            if (isHighZoom) {
-                setPropertyGeoJSON(geojson);
-            } else {
-                setClusterData(geojson);
-            }
-        } catch (err) {
-            if (err instanceof Error && err.name === "AbortError") return;
-            setPropertyGeoJSON(EMPTY_GEOJSON);
-            setClusterData(EMPTY_GEOJSON);
-        }
-    }, [setPropertyGeoJSON, setClusterData]);
-
     // Expose Refresh Bridge to parents (e.g. HomeClient)
     useImperativeHandle(ref, () => ({
         refreshMapPins: async () => {
-            const bounds = mapRef.current?.getMap().getBounds();
-            const zoom = mapRef.current?.getMap().getZoom();
-            if (bounds && zoom !== undefined) {
-                const bbox = computeBBox(bounds);
-                await fetchClusterData(bbox, zoom);
-            }
+            // MVT tiles update automatically via cache control; trigger repaint to be sure
+            mapRef.current?.getMap().triggerRepaint();
         }
-    }), [fetchClusterData]);
+    }));
+
+    // Data fetching removed - relying purely on Vector Tiles (MVT) for the Luminous Engine
+    // This dramatically simplifies state management and relies on the browser's tile cache.
+
+
 
     // Fetch vibe stats for area
     const fetchVibeStats = useCallback(async (bbox: BBox) => {
@@ -424,7 +360,6 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
             }
 
             debounceTimerRef.current = setTimeout(() => {
-                fetchClusterData(bbox, zoom);
                 fetchVibeStats(bbox);
                 currentBboxRef.current = bbox;
                 // Fetch live feed if panel is expanded
@@ -433,7 +368,7 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
                 }
             }, DEBOUNCE_MS);
         },
-        [fetchClusterData, fetchVibeStats, vibeBarExpanded]
+        [fetchVibeStats, vibeBarExpanded]
     );
 
     // Smart Auto-Pitch: One-time trigger when zooming past threshold
@@ -517,7 +452,6 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
 
             if (bounds) {
                 const bbox = computeBBox(bounds);
-                fetchClusterData(bbox, map.getZoom());
                 fetchVibeStats(bbox);
             }
 
@@ -579,7 +513,7 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
             }
 
             // Pointer cursor on interactive layers
-            const interactiveLayers = ["property-points", "clusters", "hearth-pins"];
+            const interactiveLayers = ["property-points", "hearth-pins"];
             interactiveLayers.forEach((layer) => {
                 map.on("mouseenter", layer, () => {
                     map.getCanvas().style.cursor = "pointer";
@@ -598,7 +532,7 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
                 if (hasLoggedLayers) return;
                 hasLoggedLayers = true;
 
-                const layersToCheck = [...QUERYABLE_POINT_LAYERS, "clusters", "hearth-pins", "hearth-glyphs"];
+                const layersToCheck = [...QUERYABLE_POINT_LAYERS, "hearth-pins", "hearth-glyphs"];
                 const layerStatus = layersToCheck.map(id => {
                     try {
                         return { id, exists: !!map.getLayer(id) };
@@ -614,25 +548,13 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
                 logLayersOnce();
             });
         },
-        [fetchClusterData, fetchVibeStats]
+        [fetchVibeStats]
     );
 
     // Ensure pin layers persist and stay on top (simplified - only handles vector source)
     const ensurePinLayers = useCallback(() => {
         const map = mapRef.current?.getMap();
         if (!map || !map.isStyleLoaded()) return;
-
-        // Re-add 'properties-vt' source if missing
-        if (!map.getSource("properties-vt")) {
-            try {
-                map.addSource("properties-vt", {
-                    type: "vector",
-                    tiles: [`${typeof window !== "undefined" ? window.location.origin : ""}/api/tiles/properties/{z}/{x}/{y}`],
-                    minzoom: 0,
-                    maxzoom: 14
-                });
-            } catch { /* already exists */ }
-        }
 
         // Hide commercial POIs
         hideCommercialPOIs(map);
@@ -653,7 +575,7 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
             } catch { /* ignore */ }
         }
 
-        // Move pin layers to very top
+        // Move pin layers to very top (ensure JSX layers aren't buried)
         ["hearth-pins", "hearth-pulse", "hearth-glyphs"].forEach(id => {
             if (map.getLayer(id)) {
                 try { map.moveLayer(id); } catch { /* ignore */ }
@@ -791,47 +713,13 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
                     }
                 }
 
-                // Check for cluster click first
-                const clusterFeature = features.find((f) => f.layer?.id === "clusters");
-                if (clusterFeature && clusterFeature.properties?.cluster_id !== undefined) {
-                    const map = mapRef.current?.getMap();
-                    if (!map) return;
-
-                    const source = map.getSource("cluster-source") as GeoJSONSource;
-                    if (!source) return;
-
-                    try {
-                        const clusterId = clusterFeature.properties.cluster_id;
-                        const pointCount = clusterFeature.properties.point_count || 0;
-                        const currentZoom = map.getZoom();
-                        const zoom = await source.getClusterExpansionZoom(clusterId);
-                        const geometry = clusterFeature.geometry as GeoJSON.Point;
-
-                        // Inspection mode logging
-                        inspectLog("CLUSTER_CLICK", {
-                            cluster_id: clusterId,
-                            point_count: pointCount,
-                            current_zoom: currentZoom,
-                            expansion_zoom: zoom,
-                        });
-
-                        map.easeTo({
-                            center: geometry.coordinates as [number, number],
-                            zoom: zoom,
-                            duration: 500,
-                        });
-                    } catch {
-                        // Ignore cluster zoom errors
-                    }
-                    return; // Don't open sheet for cluster click
-                }
-
+                // Cluster click logic REMOVED - using Heatmap/Zoom transition
                 // Individual property click - use feature properties directly from tiles
                 const hearthFeature = features.find((f) => f.layer?.id === "hearth-pins");
                 const baseFeature = features.find((f) => f.layer?.id === "property-points");
-                const unclusteredFeature = features.find((f) => f.layer?.id === "unclustered-point");
+                // Clusters and unclustered points removed for Heatmap
 
-                const feature = hearthFeature || baseFeature || unclusteredFeature;
+                const feature = hearthFeature || baseFeature;
                 if (!feature) return;
 
                 const propertyId = feature.properties?.property_id;
@@ -1029,19 +917,9 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
         setSelectedPropertyId(event.property_id);
     }, []);
 
-    // Update sources when data changes
-    useEffect(() => {
-        const map = mapRef.current?.getMap();
-        if (!map) return;
 
-        const clusterSource = map.getSource("cluster-source") as GeoJSONSource | undefined;
-        if (clusterSource) clusterSource.setData(clusterData);
-        const propertySource = map.getSource("properties-source") as GeoJSONSource | undefined;
-        if (propertySource) propertySource.setData(propertyGeoJSON);
-    }, [clusterData, propertyGeoJSON]);
 
-    // Show clusters layer only at low zoom
-    const showClusters = viewState.zoom <= CLUSTER_MAX_ZOOM;
+
 
     // Vibe bar visibility: hidden when any card/sheet is open
     const showVibeBar = !selectedPropertyId;
@@ -1068,7 +946,7 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
                         if (!map) return;
 
                         // Null-Safe MVT is now live - tiles are sanitized with COALESCE for all nullable fields
-                        const targetLayers = ['hearth-pins', 'property-points', 'clusters', 'unclustered-point', 'anchor-icons'];
+                        const targetLayers = ['hearth-pins', 'property-points', 'anchor-icons'];
                         const interactableLayers = targetLayers.filter(id => map.getLayer(id));
 
                         if (interactableLayers.length === 0) return;
@@ -1086,15 +964,21 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
                             // Change cursor to pointer if we hit something
                             map.getCanvas().style.cursor = 'pointer';
 
-                            // Skip cluster features for further processing
+                            // Skip cluster features (DEPRECATED: Clusters removed)
                             const topFeature = features[0];
-                            if (topFeature.source?.includes('cluster') || topFeature.properties?.cluster) return;
+                            if (topFeature.properties?.cluster) return;
+
+                            // HOVER GUARD: Data integrity check for Luminous Engine
+                            // Anchors effectively bypassed as they use 'anchor-source'
+                            if (topFeature.source === 'luminary-mvt' && !topFeature.properties?.status) {
+                                return;
+                            }
                         } catch (err) {
                             // Fallback: Prevent PBF decoder exceptions from crashing the React runtime
                             map.getCanvas().style.cursor = '';
                         }
                     }}
-                    interactiveLayerIds={["property-points", "clusters", "unclustered-point", "hearth-pins", "anchor-icons"]}
+                    interactiveLayerIds={["property-points", "hearth-pins", "anchor-icons"]}
                     style={{ width: "100%", height: "100%" }}
                     mapStyle={MAP_STYLE}
                 >
@@ -1115,13 +999,60 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
                     )}
 
 
-                    {/* GeoJSON-native Property Pins - For Instant UI Echo (Surgical Updates) */}
-                    <Source id="properties-source" type="geojson" data={propertyGeoJSON}>
+
+                    {/* 
+                        LUMINOUS ENGINE MVT SOURCE 
+                        Uses sanitized vector tiles for Heatmap and Smart Pins 
+                    */}
+                    <Source id="luminary-mvt" type="vector" tiles={[getTileUrl()]}>
+                        {/* 
+                            LUMINOUS DISCOVERY LAYER (Heatmap)
+                            Visible Zoom: 0-12
+                            Intensity: Driven by 'discovery_weight' (Moat Logic)
+                        */}
+                        <Layer
+                            id="discovery-heatmap"
+                            type="heatmap"
+                            source-layer="properties"
+                            maxzoom={12}
+                            paint={{
+                                // Weight: 0.1 (unclaimed) to 1.0 (for_sale)
+                                "heatmap-weight": ["get", "discovery_weight"],
+                                // Intensity: Ramps up as we zoom in
+                                "heatmap-intensity": [
+                                    "interpolate", ["linear"], ["zoom"],
+                                    0, 0.5,
+                                    11, 3
+                                ],
+                                // Dual-Tone Color Ramp: Transparent -> Ink-Grey -> Ember
+                                "heatmap-color": [
+                                    "interpolate", ["linear"], ["heatmap-density"],
+                                    0, "rgba(255,255,255,0)",
+                                    0.2, "rgba(140,140,140,0.5)", // Ink-Grey mist
+                                    0.5, "rgba(140,140,140,0.8)", // Semi-opaque Ink
+                                    1, "rgba(224,142,95,0.95)"    // Hot Ember
+                                ],
+                                // Radius: Expands with zoom to maintain coverage
+                                "heatmap-radius": [
+                                    "interpolate", ["linear"], ["zoom"],
+                                    0, 4,
+                                    11, 30
+                                ],
+                                // Fade Out: Seamless transition to pins at zoom 12
+                                "heatmap-opacity": [
+                                    "interpolate", ["linear"], ["zoom"],
+                                    10, 1,
+                                    12, 0
+                                ]
+                            }}
+                        />
+
                         {/* Hearth Halo - Building Glow Layer */}
                         <Layer
                             id="building-glow"
                             type="circle"
-                            minzoom={CLUSTER_MAX_ZOOM}
+                            source-layer="properties"
+                            minzoom={11}
                             filter={[
                                 "==", ["get", "has_active_intent"], true
                             ]}
@@ -1138,13 +1069,29 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
                             }}
                         />
 
-                        {/* Base Pin Layer - Data-driven Visual Affirmation */}
+                        {/* 
+                            SMART PRIORITY PINS 
+                            Visible Zoom: 11+
+                            Logic: Adaptive sizing + Semantic Stacking
+                        */}
                         <Layer
                             id="hearth-pins"
                             type="circle"
-                            minzoom={CLUSTER_MAX_ZOOM}
+                            source-layer="properties"
+                            minzoom={11}
+                            layout={{
+                                // SEMANTIC STACKING: Vital pins float to top
+                                "circle-sort-key": [
+                                    "match", ["get", "status"],
+                                    "for_sale", 100,
+                                    "open_to_talking", 90,
+                                    "for_rent", 80,
+                                    "settled", 50,
+                                    0  // unclaimed at bottom
+                                ]
+                            }}
                             paint={{
-                                // 5-State Semantic Colors: Ember for Intent, Ink-Grey for Settled, Light Stone for Unclaimed
+                                // 5-State Semantic Colors
                                 "circle-color": [
                                     "match",
                                     ["get", "status"],
@@ -1152,21 +1099,29 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
                                     "for_rent", EMBER,
                                     "open_to_talking", EMBER,
                                     "settled", INK_GREY,
-                                    // PIN VISIBILITY FIX: Use standard grey instead of invisible LIGHT_STONE
                                     "unclaimed", "#9CA3AF",
                                     "#9CA3AF" // fallback
                                 ],
-                                "circle-radius": 4,
+                                // ADAPTIVE SIZING: Unclaimed shrink to dots at mid-zoom
+                                "circle-radius": [
+                                    "interpolate", ["linear"], ["zoom"],
+                                    11, 0, // Pin-Drop: Start invisible
+                                    12, ["match", ["get", "status"],
+                                        "unclaimed", 2, // Tiny dot for unclaimed
+                                        4               // 4px for Intent
+                                    ],
+                                    15, ["match", ["get", "status"],
+                                        "unclaimed", 4,
+                                        8
+                                    ]
+                                ],
                                 "circle-opacity": [
-                                    "match",
-                                    ["get", "status"],
-                                    "for_sale", 1,
-                                    "for_rent", 1,
-                                    "open_to_talking", 1,
-                                    "settled", 0.8,
-                                    // VISIBILITY FIX: Slightly higher opacity for improved legibility
-                                    "unclaimed", 0.6,
-                                    0.6
+                                    "interpolate", ["linear"], ["zoom"],
+                                    11, 0,
+                                    12, ["match", ["get", "status"],
+                                        "unclaimed", 0.3,
+                                        1
+                                    ]
                                 ],
                                 "circle-stroke-width": 0,
                             }}
@@ -1176,7 +1131,8 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
                         <Layer
                             id="hearth-pulse"
                             type="circle"
-                            minzoom={CLUSTER_MAX_ZOOM}
+                            source-layer="properties"
+                            minzoom={11}
                             filter={[
                                 "==", ["get", "has_active_intent"], true
                             ]}
@@ -1195,7 +1151,8 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
                         <Layer
                             id="hearth-glyphs"
                             type="symbol"
-                            minzoom={CLUSTER_MAX_ZOOM}
+                            source-layer="properties"
+                            minzoom={13}
                             filter={[
                                 "any",
                                 ["==", ["get", "is_for_sale"], true],
@@ -1225,11 +1182,12 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
                             }}
                         />
 
-                        {/* Hidden sensor layer */}
+                        {/* Hidden sensor layer for click detection */}
                         <Layer
                             id="property-points"
                             type="circle"
-                            minzoom={CLUSTER_MAX_ZOOM}
+                            source-layer="properties"
+                            minzoom={11}
                             paint={{
                                 "circle-color": "#000000",
                                 "circle-radius": 8,
@@ -1238,85 +1196,6 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
                             }}
                         />
                     </Source>
-
-
-
-                    {/* GeoJSON source with clustering (visible at low zoom) */}
-                    {showClusters && (
-                        <Source
-                            id="cluster-source"
-                            type="geojson"
-                            data={clusterData}
-                            cluster={true}
-                            clusterRadius={CLUSTER_RADIUS}
-                            clusterMaxZoom={CLUSTER_MAX_ZOOM}
-                        >
-                            {/* Cluster circles */}
-                            <Layer
-                                id="clusters"
-                                type="circle"
-                                filter={["has", "point_count"]}
-                                paint={{
-                                    "circle-color": CLUSTER_COLOR,
-                                    "circle-radius": [
-                                        "step", ["get", "point_count"],
-                                        16,
-                                        10, 20,
-                                        50, 24,
-                                        100, 28,
-                                        500, 32
-                                    ],
-                                    "circle-stroke-color": "#fff",
-                                    "circle-stroke-width": 2,
-                                    "circle-opacity": [
-                                        "interpolate", ["linear"], ["zoom"],
-                                        14.75, 1,
-                                        15.25, 0
-                                    ],
-                                    "circle-stroke-opacity": [
-                                        "interpolate", ["linear"], ["zoom"],
-                                        14.75, 1,
-                                        15.25, 0
-                                    ],
-                                }}
-                            />
-
-                            {/* Cluster count labels */}
-                            <Layer
-                                id="cluster-count"
-                                type="symbol"
-                                filter={["has", "point_count"]}
-                                layout={{
-                                    "text-field": "{point_count_abbreviated}",
-                                    "text-font": ["Open Sans Bold"],
-                                    "text-size": 12,
-                                }}
-                                paint={{
-                                    "text-color": CLUSTER_TEXT_COLOR,
-                                    "text-opacity": [
-                                        "interpolate", ["linear"], ["zoom"],
-                                        14.75, 1,
-                                        15.25, 0
-                                    ],
-                                }}
-                            />
-
-                            {/* Unclustered points (individual at low zoom) */}
-                            <Layer
-                                id="unclustered-point"
-                                type="circle"
-                                filter={["!", ["has", "point_count"]]}
-                                paint={{
-                                    // Invisible base layer - intent overlay provides visible pins
-                                    // Kept for queryable hit-testing
-                                    "circle-color": "#000000",
-                                    "circle-radius": 4,
-                                    "circle-opacity": 0,
-                                    "circle-stroke-opacity": 0,
-                                }}
-                            />
-                        </Source>
-                    )}
 
                     {/* Neighborhood Anchors - Accurate 800m radii layer */}
                     {anchorData.features.length > 0 && (
@@ -1479,7 +1358,7 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
                                 <button
                                     onClick={() => toggleStatusFilter('for_sale')}
                                     className={`px-4 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-[0.2em] transition-all duration-300 transform active:scale-95 ${activeStatusFilters.includes('for_sale')
-                                        ? 'bg-[#E08E5F] text-white shadow-lg'
+                                        ? 'bg-[#E08E5F] text-white shadow-[0_0_15px_rgba(224,142,95,0.5)]'
                                         : 'bg-white/40 text-gray-400 hover:bg-white/70'
                                         }`}
                                 >
@@ -1490,7 +1369,7 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
                                 <button
                                     onClick={() => toggleStatusFilter('for_rent')}
                                     className={`px-4 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-[0.2em] transition-all duration-300 transform active:scale-95 ${activeStatusFilters.includes('for_rent')
-                                        ? 'bg-[#8C8C8C] text-white shadow-md'
+                                        ? 'bg-[#8C8C8C] text-white shadow-[0_0_15px_rgba(140,140,140,0.5)]'
                                         : 'bg-white/40 text-gray-400 hover:bg-white/70'
                                         }`}
                                 >
@@ -1501,7 +1380,7 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
                                 <button
                                     onClick={() => toggleStatusFilter('open_to_talking')}
                                     className={`relative px-4 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-[0.2em] transition-all duration-500 transform active:scale-95 overflow-hidden ${activeStatusFilters.includes('open_to_talking')
-                                        ? 'bg-white text-[#E08E5F] shadow-lg ring-1 ring-[#E08E5F]/20'
+                                        ? 'bg-white text-[#E08E5F] shadow-[0_0_20px_rgba(224,142,95,0.4)] ring-1 ring-[#E08E5F]/20'
                                         : 'bg-white/40 text-gray-400 hover:bg-white/70'
                                         }`}
                                 >
@@ -1670,12 +1549,8 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
                         onClose={handleCloseSheet}
                         onClaimSuccess={handleClaimSuccess}
                         onRefreshPins={async () => {
-                            const map = mapRef.current?.getMap();
-                            const zoom = map?.getZoom();
-                            const bounds = map?.getBounds();
-                            if (bounds && zoom !== undefined) {
-                                await fetchClusterData(computeBBox(bounds), zoom);
-                            }
+                            // MVT refresh handled by tile cache
+                            mapRef.current?.getMap().triggerRepaint();
                         }}
                         initialOpenMode={pendingOpenMode}
                         initialConversationId={pendingConversationId}
