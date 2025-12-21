@@ -3,13 +3,14 @@
 import React, { useState } from "react";
 
 interface GlassHUDProps {
-    viewMode: "paper" | "blueprint" | "satellite";
-    setViewMode: (mode: "paper" | "blueprint" | "satellite") => void;
+    viewMode: "paper" | "satellite";
+    setViewMode: (mode: "paper" | "satellite") => void;
     is3D: boolean;
     setIs3D: (is3D: boolean) => void;
     onResetOrientation: () => void;
     onZoomIn: () => void;
     onZoomOut: () => void;
+    isPitchActive: boolean;
 }
 
 export function GlassHUD({
@@ -19,7 +20,8 @@ export function GlassHUD({
     setIs3D,
     onResetOrientation,
     onZoomIn,
-    onZoomOut
+    onZoomOut,
+    isPitchActive
 }: GlassHUDProps) {
     const [showStyleMenu, setShowStyleMenu] = useState(false);
 
@@ -30,7 +32,7 @@ export function GlassHUD({
                 flex flex-col gap-1 bg-[#F9F7F4]/90 backdrop-blur-[24px] border border-[#1B1B1B]/10 rounded-lg p-1.5 shadow-lg transition-all duration-300 origin-bottom-right mb-1 mr-1
                 ${showStyleMenu ? "opacity-100 scale-100" : "opacity-0 scale-95 pointer-events-none"}
             `}>
-                {(["paper", "blueprint", "satellite"] as const).map((mode) => (
+                {(["paper", "satellite"] as const).map((mode) => (
                     <button
                         key={mode}
                         onClick={() => {
@@ -67,9 +69,9 @@ export function GlassHUD({
                     className={`p-2 rounded-full transition-all duration-300 relative group mb-2`}
                     aria-label="Toggle 3D"
                 >
-                    <div className={`absolute inset-0 rounded-full transition-opacity duration-500 ${is3D ? "bg-ember/10 opacity-100" : "opacity-0"}`} />
+                    <div className={`absolute inset-0 rounded-full transition-opacity duration-500 ${isPitchActive ? "bg-ember/10 opacity-100" : "opacity-0"}`} />
                     <svg
-                        className={`w-5 h-5 transition-colors duration-300 ${is3D ? "text-ember drop-shadow-[0_0_8px_rgba(224,142,95,0.5)]" : "text-ink group-hover:text-ink/70"}`}
+                        className={`w-5 h-5 transition-colors duration-300 ${isPitchActive ? "text-ember drop-shadow-[0_0_8px_rgba(224,142,95,0.5)]" : "text-ink group-hover:text-ink/70"}`}
                         fill="none" viewBox="0 0 24 24" stroke="currentColor"
                     >
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />

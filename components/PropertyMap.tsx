@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useCallback, useRef, useEffect, useImperativeHandle, forwardRef } from "react";
-import Map, { Source, Layer, ViewStateChangeEvent, MapRef, Marker } from "react-map-gl/maplibre";
+import Map, { Source, Layer, ViewStateChangeEvent, MapRef } from "react-map-gl/maplibre";
 import type { MapLayerMouseEvent, GeoJSONSource } from "maplibre-gl";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
@@ -163,8 +163,9 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
     const [isFilterMobileExpanded, setIsFilterMobileExpanded] = useState(false);
     const [pendingOpenMode, setPendingOpenMode] = useState<"card" | "messages">("card");
     const [pendingConversationId, setPendingConversationId] = useState<string | null>(null);
-    const [viewMode, setViewMode] = useState<"paper" | "blueprint" | "satellite">("paper");
-    const [is3D, setIs3D] = useState(true);  // 2D/3D performance toggle
+    const [viewMode, setViewMode] = useState<"paper" | "satellite">("paper");
+    const [is3D, setIs3D] = useState(false);  // 2D/3D performance toggle - Default OFF for reliable first-click sync
+    const [isPitchActive, setIsPitchActive] = useState(false); // Visual feedback state
 
     const { accessToken, user } = useAuth();
     const clusterAbortRef = useRef<AbortController | null>(null);
@@ -375,13 +376,11 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
         [fetchVibeStats, vibeBarExpanded]
     );
 
-    // Smart Auto-Pitch: One-time trigger when zooming past threshold
-    // Respects manual user input (right-click tilt) by using override refs
+    // Smart Auto-Pitch: Detect manual user input (right-click tilt)
     useEffect(() => {
         const map = mapRef.current?.getMap();
         if (!map) return;
 
-        // Detect manual pitch changes (user right-click tilting)
         const handlePitchStart = () => {
             manualPitchOverrideRef.current = true;
         };
@@ -393,27 +392,27 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
         };
     }, []);
 
-    // Auto-pitch on zoom: only trigger once, respect manual override
+    // Map Event Listeners: Pitch Sync
     useEffect(() => {
         const map = mapRef.current?.getMap();
-        if (!map || !is3D || viewMode === "satellite") return;
+        if (!map) return;
 
-        const zoom = viewState.zoom;
+        const updatePitchState = () => {
+            const pitch = map.getPitch();
+            setIsPitchActive(pitch > 5); // Threshold for visual "active" state
+        };
 
-        // Blueprint mode: always 45° pitch
-        if (viewMode === "blueprint") {
-            if (map.getPitch() < 40) {
-                map.easeTo({ pitch: 45, duration: 600 });
-            }
-            return;
-        }
+        map.on("pitch", updatePitchState);
+        map.on("move", updatePitchState); // Catch all movement
 
-        // Paper mode: auto-pitch once when zooming past 16.5 (unless manually overridden)
-        if (!manualPitchOverrideRef.current && !hasAutoPitchedRef.current && zoom > 16.5) {
-            hasAutoPitchedRef.current = true;
-            map.easeTo({ pitch: 45, duration: 600 });
-        }
-    }, [viewState.zoom, is3D, viewMode]);
+        // Initial check
+        updatePitchState();
+
+        return () => {
+            map.off("pitch", updatePitchState);
+            map.off("move", updatePitchState);
+        };
+    }, []);
 
     // Fetch live feed events
     const fetchLiveFeed = useCallback(async (bbox: BBox) => {
@@ -601,12 +600,16 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
             if (map.getLayer("building-3d")) return;
             if (!map.isStyleLoaded()) return;
 
-            const existingBuilding = map.getStyle()?.layers?.find(l =>
+            const layers = map.getStyle()?.layers || [];
+            const existingBuilding = layers.find(l =>
                 l.id.includes("building") && l.type === "fill"
             );
 
             if (existingBuilding && 'source' in existingBuilding) {
                 try {
+                    // Ghostly Skeleton Logic
+                    const isGhost = viewMode === "satellite";
+
                     map.addLayer({
                         id: "building-3d",
                         source: existingBuilding.source as string,
@@ -614,16 +617,24 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
                         type: "fill-extrusion",
                         minzoom: 14,
                         paint: {
-                            // Cinematic 3D: Warm tone-on-tone editorial look
-                            "fill-extrusion-color": BUILDING_WARM,
+                            // Cinematic 3D: varying styles based on Skin
+                            "fill-extrusion-color": isGhost ? "#E0E0E0" : BUILDING_WARM, // Neutral Light Grey if Ghost
                             "fill-extrusion-height": 6.5,
                             "fill-extrusion-base": 0,
-                            "fill-extrusion-opacity": 0.6
+                            "fill-extrusion-opacity": isGhost ? 0.4 : 0.6 // Ghostly transparency vs Solid
                         }
                     });
                 } catch (e) {
                     console.warn("Could not add 3D buildings:", e);
                 }
+            } else {
+                // RETRY LOGIC: Sometimes the style is "loaded" but the remote source layers 
+                // haven't fully populated the local style object. Retry once on idle.
+                map.once("idle", () => {
+                    if (is3D && !map.getLayer("building-3d")) {
+                        add3DBuildings();
+                    }
+                });
             }
         };
 
@@ -634,21 +645,89 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
             }
         };
 
+        // Clean Satellite Lens: Aggressively hide EVERYTHING that isn't a Hearth layer
+        // This ensures Satellite mode is pure imagery + pins + 3D skeleton (if active)
+        const cleanSatelliteLens = () => {
+            if (!map.isStyleLoaded()) return;
+
+            const performClean = () => {
+                const layers = map.getStyle().layers || [];
+                const HEARTH_LAYERS = [
+                    "satellite-layer",
+                    "building-3d",
+                    "discovery-heatmap",
+                    "building-glow",
+                    "hearth-pins",
+                    "hearth-pulse",
+                    "hearth-glyphs",
+                    "property-points",
+                    "anchor-radii",
+                    "anchor-icons",
+                    "anchor-labels"
+                ];
+
+                const isSatellite = viewMode === "satellite";
+                const targetVisibility = isSatellite ? "none" : "visible";
+
+                layers.forEach(l => {
+                    // If it's one of our custom layers, LEAVE IT ALONE
+                    if (HEARTH_LAYERS.includes(l.id)) return;
+
+                    // Otherwise: Force override visibility (no optimization check to ensure consistency)
+                    try {
+                        map.setLayoutProperty(l.id, "visibility", targetVisibility);
+                    } catch (e) {
+                        // Layer might be missing or locked
+                    }
+                });
+            };
+
+            // Run immediately
+            performClean();
+
+            // Run again on next tick to catch any race conditions
+            setTimeout(performClean, 50);
+        };
+
         // Stack layers: Satellite (bottom) -> Buildings (if 3D) -> Pins (top)
         const stackLayers = () => {
-            // 1. Satellite at absolute bottom
+            // 1. Satellite: Ensure it's above the background but below everything else
             if (map.getLayer("satellite-layer")) {
                 try {
-                    const firstLayerId = map.getStyle().layers?.[0]?.id;
-                    if (firstLayerId && firstLayerId !== "satellite-layer") {
-                        map.moveLayer("satellite-layer", firstLayerId);
+                    const layers = map.getStyle().layers || [];
+                    const backgroundLayer = layers.find(l => l.type === 'background');
+
+                    if (backgroundLayer) {
+                        // Place strictly AFTER background
+                        const bgIndex = layers.findIndex(l => l.id === backgroundLayer.id);
+                        const nextLayer = layers[bgIndex + 1];
+                        if (nextLayer && nextLayer.id !== "satellite-layer") {
+                            map.moveLayer("satellite-layer", nextLayer.id);
+                        }
+                    } else {
+                        // No background layer found, index 0 is safe (transparent canvas)
+                        const firstLayerId = layers[0]?.id;
+                        if (firstLayerId && firstLayerId !== "satellite-layer") {
+                            map.moveLayer("satellite-layer", firstLayerId);
+                        }
                     }
                 } catch { /* ignore */ }
             }
 
             // 2. 3D buildings above satellite
             if (map.getLayer("building-3d")) {
-                try { map.moveLayer("building-3d"); } catch { /* ignore */ }
+                try {
+                    // Move building-3d above satellite-layer if it exists, otherwise just ensure it's below points
+                    const beforeId = map.getLayer("hearth-pins") ? "hearth-pins" :
+                        map.getLayer("property-points") ? "property-points" : undefined;
+
+                    if (beforeId) {
+                        map.moveLayer("building-3d", beforeId);
+                    } else {
+                        // If neither exists yet, just move it to top of stack so far
+                        map.moveLayer("building-3d");
+                    }
+                } catch { /* ignore */ }
             }
 
             // 3. Hearth pin layers on very top (in order: pins, pulse, glyphs)
@@ -669,10 +748,16 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
             // Handle 3D mode - buildings available in ALL modes when is3D is true
             // Pitch is now controlled by the smooth pitch coupling useEffect and 2D toggle
             if (is3D) {
+                // If switching styles, we might need to update the building styling (Ghost vs Solid)
+                // Remove and re-add to force style update
+                remove3DBuildings();
                 add3DBuildings();
             } else {
                 remove3DBuildings();
             }
+
+            // Toggle roads/landuse for Clean Reality
+            cleanSatelliteLens();
 
             // Stack layers correctly
             stackLayers();
@@ -694,7 +779,7 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
         return () => {
             map.off("style.load", handleStyleUpdate);
         };
-    }, [viewMode, is3D, ensurePinLayers]);
+    }, [viewMode, is3D, ensurePinLayers]); // Re-run when viewMode changes to update visuals
 
     // Handle map click - cluster zoom or property select
     const handleMapClick = useCallback(
@@ -856,7 +941,7 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
 
     // Living Pin Pulse Animation (4s cycle)
     useEffect(() => {
-        let startTime = Date.now();
+        const startTime = Date.now();
         let animationFrame: number;
 
         const animate = () => {
@@ -1490,40 +1575,27 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
                 <GlassHUD
                     viewMode={viewMode}
                     setViewMode={(mode) => {
+                        // SKIN ISOLATION: Changing style never touches the camera.
                         setViewMode(mode);
-                        // Reset overrides
-                        manualPitchOverrideRef.current = false;
-                        hasAutoPitchedRef.current = false;
 
-                        const map = mapRef.current?.getMap();
-                        if (!map) return;
-
-                        if (mode === "paper") {
-                            map.easeTo({ pitch: 0, duration: 400 });
-                        } else if (mode === "blueprint") {
-                            setIs3D(true);
-                            map.easeTo({ pitch: 45, duration: 600 });
-                        } else if (mode === "satellite") {
+                        // SATELLITE DEFAULT: Always start in 2D (Pure Imagery)
+                        // User must explicitly toggle 3D ON if they want the Ghostly Skeleton
+                        if (mode === "satellite") {
                             setIs3D(false);
-                            map.easeTo({ pitch: 0, duration: 400 });
                         }
                     }}
                     is3D={is3D}
                     setIs3D={(enabled) => {
+                        // PURE GEOMETRY TOGGLE: No longer linked to map pitch/tilt
                         setIs3D(enabled);
-                        const map = mapRef.current?.getMap();
-                        if (map) {
-                            // If enabling 3D, tilt to 45. If disabling, flatten to 0.
-                            map.easeTo({ pitch: enabled ? 45 : 0, duration: 1000 });
-                        }
                     }}
                     onResetOrientation={() => {
-                        // Reset to North up, default pitch based on mode
                         const map = mapRef.current?.getMap();
                         if (map) {
+                            // Standard Reset: North-up and Flat (Top-down)
                             map.easeTo({
                                 bearing: 0,
-                                pitch: is3D ? 45 : 0,
+                                pitch: 0,
                                 duration: 1000
                             });
                         }
@@ -1536,6 +1608,7 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
                         const map = mapRef.current?.getMap();
                         map?.zoomOut({ duration: 300 });
                     }}
+                    isPitchActive={isPitchActive}
                 />
 
                 {/* Property card sheet */}
