@@ -8,7 +8,8 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import type { BBox } from "@/types/property";
 import { AuthControls } from "@/components/AuthControls";
 import { PropertyCardSheet } from "@/components/PropertyCardSheet";
-import { AreaVibeBar, type VibeStats, type LiveFeedEvent } from "@/components/AreaVibeBar";
+import { AreaVibeBar, VibeStats, LiveFeedEvent } from "./AreaVibeBar";
+import { GlassHUD } from "./GlassHUD";
 import { GlobalInboxOverlay } from "@/components/GlobalInboxOverlay";
 import { AnchorSnippet, featureToAnchorData, type AnchorFeatureProperties } from "@/components/AnchorSnippet";
 import { useAuth } from "@/app/AuthProvider";
@@ -142,6 +143,7 @@ function safeQueryRenderedFeatures(
 
 export interface PropertyMapRef {
     refreshMapPins: () => Promise<void>;
+    openMessageCentre: () => void;
 }
 
 const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
@@ -244,12 +246,13 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
     const clearStatusFilters = () => setActiveStatusFilters([]);
     const selectAllFilters = () => setActiveStatusFilters(['for_sale', 'for_rent', 'open_to_talking', 'settled', 'unclaimed']);
 
-    // Expose Refresh Bridge to parents (e.g. HomeClient)
+    // Expose Bridge to parents (e.g. HomeClient / Header)
     useImperativeHandle(ref, () => ({
         refreshMapPins: async () => {
             // MVT tiles update automatically via cache control; trigger repaint to be sure
             mapRef.current?.getMap().triggerRepaint();
-        }
+        },
+        openMessageCentre: () => setShowMessageCentre(true)
     }));
 
     // Data fetching removed - relying purely on Vector Tiles (MVT) for the Luminous Engine
@@ -987,6 +990,8 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
                     }
                     style={{ width: "100%", height: "100%" }}
                     mapStyle={MAP_STYLE}
+                    attributionControl={false}
+                    reuseMaps
                 >
                     {/* Satellite layer - High-Fi reality-focused imagery */}
                     {viewMode === "satellite" && (
@@ -998,7 +1003,7 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
                                 paint={{
                                     "raster-brightness-min": 0.05,
                                     "raster-contrast": 0.1,
-                                    "raster-saturation": 0  // Hi-Fi 2025: natural greens and blues pop
+                                    "raster-saturation": 0,  // Hi-Fi 2025: natural greens and blues pop
                                 }}
                             />
                         </Source>
@@ -1030,19 +1035,19 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
                                     0, 0.5,
                                     11, 3
                                 ],
-                                // Dual-Tone Color Ramp: Transparent -> Ink-Grey -> Ember
+                                // Clinical Blueprint Color Ramp
                                 "heatmap-color": [
                                     "interpolate", ["linear"], ["heatmap-density"],
                                     0, "rgba(255,255,255,0)",
-                                    0.2, "rgba(140,140,140,0.5)", // Ink-Grey mist
-                                    0.5, "rgba(140,140,140,0.8)", // Semi-opaque Ink
-                                    1, "rgba(224,142,95,0.95)"    // Hot Ember
+                                    0.1, "rgba(140,140,140,0.15)", // Clinical Grey Tint (15%)
+                                    0.8, "rgba(224,142,95,0.8)",   // Ember Hotspot (80%)
+                                    1, "rgba(224,142,95,0.8)"      // Peak
                                 ],
                                 // Radius: Expands with zoom to maintain coverage
                                 "heatmap-radius": [
                                     "interpolate", ["linear"], ["zoom"],
-                                    0, 4,
-                                    11, 30
+                                    0, 2,
+                                    11, 15 // Sharpened Logic
                                 ],
                                 // Fade Out: Seamless transition to pins at zoom 12
                                 "heatmap-opacity": [
@@ -1121,25 +1126,29 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
                                     "unclaimed", "#9CA3AF",
                                     "#9CA3AF" // fallback
                                 ],
-                                // ADAPTIVE SIZING: Unclaimed shrink to dots at mid-zoom
+                                // ADAPTIVE SIZING: Semantic Hierarchy
                                 "circle-radius": [
                                     "interpolate", ["linear"], ["zoom"],
                                     11, 0, // Pin-Drop: Start invisible
                                     12, ["match", ["get", "status"],
-                                        "unclaimed", 2, // Tiny dot for unclaimed
-                                        4               // 4px for Intent
+                                        "unclaimed", 2, // Tiny dot
+                                        "settled", 3,   // 50% of Intent
+                                        6               // Intent (6px)
                                     ],
                                     15, ["match", ["get", "status"],
                                         "unclaimed", 4,
-                                        8
+                                        "settled", 6,
+                                        10
                                     ]
                                 ],
+                                // SEMANTIC OPACITY: Blueprint Logic
                                 "circle-opacity": [
                                     "interpolate", ["linear"], ["zoom"],
                                     11, 0,
                                     12, ["match", ["get", "status"],
                                         "unclaimed", 0.3,
-                                        1
+                                        "settled", 0.6, // Blueprint Opacity
+                                        1               // Active Intent
                                     ]
                                 ],
                                 "circle-stroke-width": 0,
@@ -1476,106 +1485,58 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
                     </div>
                 </div>
 
-                {/* Top-left controls */}
-                <div className="absolute top-4 left-4 flex flex-col gap-2">
-                    <AuthControls />
-                    {/* Messages button - only for authenticated users */}
-                    {user && (
-                        <button
-                            onClick={() => setShowMessageCentre(true)}
-                            className="bg-white/90 backdrop-blur-sm rounded-lg p-2.5 shadow-md hover:bg-white transition-colors flex items-center gap-2"
-                            aria-label="Messages"
-                        >
-                            <svg className="w-5 h-5 text-ember" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-                            </svg>
-                            <span className="text-sm font-medium text-gray-700">Messages</span>
-                        </button>
-                    )}
+                {/* HEADER & HUD are now managed by HomeClient and GlassHUD */}
 
-                    {/* Satellite Toggle (Deprecated by Mode Selector) */}
-                </div>
+                <GlassHUD
+                    viewMode={viewMode}
+                    setViewMode={(mode) => {
+                        setViewMode(mode);
+                        // Reset overrides
+                        manualPitchOverrideRef.current = false;
+                        hasAutoPitchedRef.current = false;
 
-                {/* Instrument Bar - Unified View Controls with Hearth Design Bible polish */}
-                <div className="absolute bottom-10 right-4 flex flex-col gap-1.5 z-10 bg-[#F9F7F4]/95 backdrop-blur-[24px] border border-[#1B1B1B]/10 rounded-lg shadow-sm p-1.5 font-['Inter',sans-serif]">
-                    {/* Row 1: View Mode - Rationalized State Machine */}
-                    <div className="flex rounded-md overflow-hidden">
-                        {(["paper", "blueprint", "satellite"] as const).map((mode) => (
-                            <button
-                                key={mode}
-                                onClick={() => {
-                                    const map = mapRef.current?.getMap();
-                                    setViewMode(mode);
+                        const map = mapRef.current?.getMap();
+                        if (!map) return;
 
-                                    // Reset manual override when switching modes
-                                    manualPitchOverrideRef.current = false;
-                                    hasAutoPitchedRef.current = false;
-
-                                    if (mode === "paper") {
-                                        // Paper: flat top-down, clean lines
-                                        if (map) map.easeTo({ pitch: 0, duration: 400 });
-                                    } else if (mode === "blueprint") {
-                                        // Blueprint: stark 3D, always 45° pitch
-                                        setIs3D(true);
-                                        if (map) map.easeTo({ pitch: 45, duration: 600 });
-                                    } else if (mode === "satellite") {
-                                        // Satellite: reality-focused, 3D OFF by default for clear photos
-                                        setIs3D(false);
-                                        if (map) map.easeTo({ pitch: 0, duration: 400 });
-                                    }
-                                }}
-                                className={`px-3 py-1.5 text-xs font-medium capitalize transition-colors ${viewMode === mode
-                                    ? "bg-[#1B1B1B] text-white"
-                                    : "text-[#1B1B1B] hover:bg-gray-100"
-                                    } ${mode !== "satellite" ? "border-r border-[#1B1B1B]/10" : ""}`}
-                            >
-                                {mode}
-                            </button>
-                        ))}
-                    </div>
-
-                    {/* Row 2: Depth Toggle - Camera Pitch Invariant */}
-                    <button
-                        onClick={() => {
-                            const map = mapRef.current?.getMap();
-                            if (is3D) {
-                                // Switching to 2D: smooth ease to flat over 1000ms
-                                setIs3D(false);
-                                if (map) {
-                                    map.easeTo({ pitch: 0, duration: 1000 });
-                                }
-                            } else {
-                                // Switching to 3D: smooth ease to 45° pitch over 1000ms
-                                setIs3D(true);
-                                if (map) {
-                                    map.easeTo({ pitch: 45, duration: 1000 });
-                                }
-                            }
-                        }}
-                        className={`w-full px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${is3D
-                            ? "bg-[#1B1B1B] text-white"
-                            : "text-[#1B1B1B] hover:bg-gray-100 border border-[#1B1B1B]/10"
-                            }`}
-                    >
-                        {is3D ? "3D Depth On" : "3D Depth Off"}
-                    </button>
-
-                    {/* Row 3: Orientation Tier Filter - Filter anchors by tier */}
-                    <div className="flex overflow-hidden rounded-md border border-[#1B1B1B]/10 mt-2">
-                        {(['all', 'foundational', 'practical', 'spirit'] as const).map((tier, idx) => (
-                            <button
-                                key={tier}
-                                onClick={() => setAnchorTierFilter(tier)}
-                                className={`flex-1 px-2 py-1.5 text-[10px] font-medium capitalize transition-colors ${anchorTierFilter === tier
-                                    ? "bg-[#1B1B1B] text-white"
-                                    : "text-[#1B1B1B] hover:bg-gray-100"
-                                    } ${idx < 3 ? "border-r border-[#1B1B1B]/10" : ""}`}
-                            >
-                                {tier === 'all' ? 'All' : tier.charAt(0).toUpperCase() + tier.slice(1)}
-                            </button>
-                        ))}
-                    </div>
-                </div>
+                        if (mode === "paper") {
+                            map.easeTo({ pitch: 0, duration: 400 });
+                        } else if (mode === "blueprint") {
+                            setIs3D(true);
+                            map.easeTo({ pitch: 45, duration: 600 });
+                        } else if (mode === "satellite") {
+                            setIs3D(false);
+                            map.easeTo({ pitch: 0, duration: 400 });
+                        }
+                    }}
+                    is3D={is3D}
+                    setIs3D={(enabled) => {
+                        setIs3D(enabled);
+                        const map = mapRef.current?.getMap();
+                        if (map) {
+                            // If enabling 3D, tilt to 45. If disabling, flatten to 0.
+                            map.easeTo({ pitch: enabled ? 45 : 0, duration: 1000 });
+                        }
+                    }}
+                    onResetOrientation={() => {
+                        // Reset to North up, default pitch based on mode
+                        const map = mapRef.current?.getMap();
+                        if (map) {
+                            map.easeTo({
+                                bearing: 0,
+                                pitch: is3D ? 45 : 0,
+                                duration: 1000
+                            });
+                        }
+                    }}
+                    onZoomIn={() => {
+                        const map = mapRef.current?.getMap();
+                        map?.zoomIn({ duration: 300 });
+                    }}
+                    onZoomOut={() => {
+                        const map = mapRef.current?.getMap();
+                        map?.zoomOut({ duration: 300 });
+                    }}
+                />
 
                 {/* Property card sheet */}
                 {selectedPropertyId && (
