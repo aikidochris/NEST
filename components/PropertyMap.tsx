@@ -204,22 +204,23 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
         if (!map) return;
 
         const applyFilters = () => {
-            const layersToFilter = [
-                'hearth-pins',
-                'hearth-glyphs',
-                'property-points'
-                // STRICT ISOLATION: 'building-glow' and 'hearth-pulse' excluded
-                // These layers use hardcoded 'has_active_intent' filter from MVT
-            ];
+            // 1. BASE FILTER: Handle explicit 'Clear' state (Empty Map)
+            const baseFilter = activeStatusFilters.length === 0
+                ? ['==', ['get', 'property_id'], 'NONE']
+                : ['in', ['get', 'status'], ['literal', activeStatusFilters]];
 
-            // Surgical Filter Logic using 'in' expression for status matching
-            // Logical Fallback: If all filters off, default to showing 'unclaimed' to prevent empty map
-            const effectiveFilters = activeStatusFilters.length === 0 ? ['unclaimed'] : activeStatusFilters;
-            const statusFilter = ['in', ['get', 'status'], ['literal', effectiveFilters]];
-
-            layersToFilter.forEach(layerId => {
+            // 2. STANDARD LAYERS: All Pins, Glyphs, Interaction Points
+            ['hearth-pins', 'hearth-glyphs', 'property-points'].forEach(layerId => {
                 if (map.getLayer(layerId)) {
-                    map.setFilter(layerId, statusFilter as any);
+                    map.setFilter(layerId, baseFilter as any);
+                }
+            });
+
+            // 3. INTENT LAYERS: Glow & Pulse (Must ONLY show for active intent)
+            const intentFilter = ['all', baseFilter, ['==', ['get', 'has_active_intent'], true]];
+            ['building-glow', 'hearth-pulse'].forEach(layerId => {
+                if (map.getLayer(layerId)) {
+                    map.setFilter(layerId, intentFilter as any);
                 }
             });
         };
@@ -978,7 +979,12 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
                             map.getCanvas().style.cursor = '';
                         }
                     }}
-                    interactiveLayerIds={["property-points", "hearth-pins", "anchor-icons"]}
+                    interactiveLayerIds={
+                        // Ghost Hover Guard: Disable anchor interaction below Z12
+                        viewState.zoom < 12
+                            ? ["property-points", "hearth-pins"]
+                            : ["property-points", "hearth-pins", "anchor-icons"]
+                    }
                     style={{ width: "100%", height: "100%" }}
                     mapStyle={MAP_STYLE}
                 >
@@ -1053,19 +1059,27 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
                             type="circle"
                             source-layer="properties"
                             minzoom={11}
-                            filter={[
-                                "==", ["get", "has_active_intent"], true
-                            ]}
+                            filter={
+                                activeStatusFilters.length === 0
+                                    ? ['==', ['get', 'property_id'], 'NONE']
+                                    : ['all',
+                                        ['in', ['get', 'status'], ['literal', activeStatusFilters]],
+                                        ['==', ['get', 'has_active_intent'], true]
+                                    ]
+                            }
                             paint={{
                                 "circle-color": EMBER,
-                                "circle-opacity": 0.2,
+                                "circle-opacity": 0, // DONUT EFFECT: Transparent center to protect icon legibility
+                                "circle-stroke-width": 4,
+                                "circle-stroke-color": EMBER,
+                                "circle-stroke-opacity": 0.4,
                                 "circle-radius": [
                                     "interpolate", ["linear"], ["zoom"],
                                     15, 15,
                                     17, 35,
                                     19, 60
                                 ],
-                                "circle-blur": 0.8
+                                "circle-blur": 0.8 // Soften the outer ring
                             }}
                         />
 
@@ -1079,6 +1093,11 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
                             type="circle"
                             source-layer="properties"
                             minzoom={11}
+                            filter={
+                                activeStatusFilters.length === 0
+                                    ? ['==', ['get', 'property_id'], 'NONE']
+                                    : ['in', ['get', 'status'], ['literal', activeStatusFilters]]
+                            }
                             layout={{
                                 // SEMANTIC STACKING: Vital pins float to top
                                 "circle-sort-key": [
@@ -1133,9 +1152,14 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
                             type="circle"
                             source-layer="properties"
                             minzoom={11}
-                            filter={[
-                                "==", ["get", "has_active_intent"], true
-                            ]}
+                            filter={
+                                activeStatusFilters.length === 0
+                                    ? ['==', ['get', 'property_id'], 'NONE']
+                                    : ['all',
+                                        ['in', ['get', 'status'], ['literal', activeStatusFilters]],
+                                        ['==', ['get', 'has_active_intent'], true]
+                                    ]
+                            }
                             paint={{
                                 "circle-color": EMBER,
                                 "circle-radius": [
@@ -1153,12 +1177,11 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
                             type="symbol"
                             source-layer="properties"
                             minzoom={13}
-                            filter={[
-                                "any",
-                                ["==", ["get", "is_for_sale"], true],
-                                ["==", ["get", "is_for_rent"], true],
-                                ["==", ["get", "is_open_to_talking"], true]
-                            ]}
+                            filter={
+                                activeStatusFilters.length === 0
+                                    ? ['==', ['get', 'property_id'], 'NONE']
+                                    : ['in', ['get', 'status'], ['literal', activeStatusFilters]]
+                            }
                             layout={{
                                 "text-field": [
                                     "match",
@@ -1188,6 +1211,11 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
                             type="circle"
                             source-layer="properties"
                             minzoom={11}
+                            filter={
+                                activeStatusFilters.length === 0
+                                    ? ['==', ['get', 'property_id'], 'NONE']
+                                    : ['in', ['get', 'status'], ['literal', activeStatusFilters]]
+                            }
                             paint={{
                                 "circle-color": "#000000",
                                 "circle-radius": 8,
@@ -1250,6 +1278,7 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
                             <Layer
                                 id="anchor-icons"
                                 type="symbol"
+                                minzoom={11}
                                 filter={
                                     anchorTierFilter === 'all'
                                         ? true
@@ -1284,6 +1313,12 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
                                     "icon-ignore-placement": true
                                 }}
                                 paint={{
+                                    // VISUAL TRANSITION: Smooth fade-in (11.5 -> 12)
+                                    "icon-opacity": [
+                                        "interpolate", ["linear"], ["zoom"],
+                                        11.5, 0,
+                                        12, 1
+                                    ],
                                     // GPU expression: EMBER if active/locked, INK_GREY otherwise (SDF coloring)
                                     "icon-color": [
                                         "case",
