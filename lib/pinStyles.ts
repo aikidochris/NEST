@@ -2,15 +2,12 @@
  * Pin semantic styles - shape, ring, badge, halo configurations.
  * Single source of truth for map pins and UI baseline.
  * 
- * Semantic rules:
- * - unclaimed: small filled circle, light grey, thin stroke
- * - claimed/owner_no_status: slightly larger circle, medium grey
- * - open_to_talking: teal + thicker ring (stroke) = "social"
- * - for_sale: coral + badge dot top-right
- * - for_rent: indigo + badge dot top-right
- * - settled: dark grey, no badge
- * - unknown (debug): hollow circle + dashed stroke
- * - flagged (admin): hollow + dashed + "!" badge
+ * STRICT EMBER RULE (hearth. brand bible):
+ * - Active states (for_rent, for_sale, open_to_talking) = EMBER fill
+ * - Unclaimed = Muted Grey (#9CA3AF)
+ * - Base radius = 5px (editorial, not app-like)
+ * - Stroke = 0.5px INK (#1B1B1B)
+ * - Glyphs: '+' (open_to_talking), '£' (for_sale), 'r' (for_rent)
  */
 
 import type { Status } from "./status";
@@ -51,6 +48,10 @@ export interface PinSemanticStyle {
         width: number;
         color: string;
     };
+    /** Whether the pin should pulse (Living Pin) */
+    pulse: boolean;
+    /** Internal glyph/symbol (e.g. "+", "£", "r") */
+    glyph?: string;
 }
 
 export interface InteractionStyles {
@@ -68,101 +69,113 @@ export interface InteractionStyles {
 }
 
 // =============================================================================
-// SEMANTIC PIN STYLES BY STATUS
+// SEMANTIC PIN STYLES BY STATUS - STRICT EMBER RULE
 // =============================================================================
 
-const DEFAULT_STROKE_COLOR = "#FFFFFF";
+const INK_STROKE = "#1B1B1B";  // Brand ink color for strokes
 
 export const PIN_SEMANTIC_STYLES: Record<ExtendedStatus, PinSemanticStyle> = {
     unclaimed: {
-        radius: 5,
+        radius: 4.5,
         fillColor: PIN_COLORS.unclaimed,
         hollow: false,
-        strokeWidth: 1,
-        strokeColor: "#9CA3AF",  // Slightly darker for contrast
+        strokeWidth: 0.5,
+        strokeColor: INK_STROKE,
         strokeStyle: "solid",
         badge: { show: false, color: "" },
         ring: { show: false, width: 0, color: "" },
+        pulse: false,
     },
     claimed: {
-        radius: 6,
+        radius: 4.5,
         fillColor: PIN_COLORS.claimed,
         hollow: false,
-        strokeWidth: 1.5,
-        strokeColor: DEFAULT_STROKE_COLOR,
+        strokeWidth: 0.5,
+        strokeColor: INK_STROKE,
         strokeStyle: "solid",
         badge: { show: false, color: "" },
         ring: { show: false, width: 0, color: "" },
+        pulse: false,
     },
     owner_no_status: {
-        radius: 6,
+        radius: 4.5,
         fillColor: PIN_COLORS.owner_no_status,
         hollow: false,
-        strokeWidth: 1.5,
-        strokeColor: DEFAULT_STROKE_COLOR,
+        strokeWidth: 0.5,
+        strokeColor: INK_STROKE,
         strokeStyle: "solid",
         badge: { show: false, color: "" },
         ring: { show: false, width: 0, color: "" },
+        pulse: false,
     },
     open_to_talking: {
-        radius: 6,
-        fillColor: PIN_COLORS.open_to_talking,
+        radius: 4.5,
+        fillColor: PIN_COLORS.open_to_talking,  // EMBER
         hollow: false,
-        strokeWidth: 3,  // Thicker ring = "social"
-        strokeColor: "#005F5F",  // Darker teal for ring
+        strokeWidth: 0.5,
+        strokeColor: INK_STROKE,
         strokeStyle: "solid",
         badge: { show: false, color: "" },
-        ring: { show: true, width: 3, color: "#005F5F" },
+        ring: { show: true, width: 2, color: "#E08E5F" },  // Ember ring
+        pulse: true,
+        glyph: "+",
     },
     for_sale: {
-        radius: 6,
-        fillColor: PIN_COLORS.for_sale,
+        radius: 4.5,
+        fillColor: PIN_COLORS.for_sale,  // EMBER
         hollow: false,
-        strokeWidth: 1.5,
-        strokeColor: DEFAULT_STROKE_COLOR,
+        strokeWidth: 0.5,
+        strokeColor: INK_STROKE,
         strokeStyle: "solid",
-        badge: { show: true, color: PIN_COLORS.for_sale },
+        badge: { show: true, color: "#E08E5F" },
         ring: { show: false, width: 0, color: "" },
+        pulse: true,
+        glyph: "£",
     },
     for_rent: {
-        radius: 6,
-        fillColor: PIN_COLORS.for_rent,
+        radius: 4.5,
+        fillColor: PIN_COLORS.for_rent,  // EMBER (was Indigo)
         hollow: false,
-        strokeWidth: 1.5,
-        strokeColor: DEFAULT_STROKE_COLOR,
+        strokeWidth: 0.5,
+        strokeColor: INK_STROKE,
         strokeStyle: "solid",
-        badge: { show: true, color: PIN_COLORS.for_rent },
+        badge: { show: true, color: "#E08E5F" },
         ring: { show: false, width: 0, color: "" },
+        pulse: true,  // Active state pulses
+        glyph: "r",   // Key/rental indicator
     },
     settled: {
-        radius: 6,
+        radius: 4.5,
         fillColor: PIN_COLORS.settled,
         hollow: false,
-        strokeWidth: 1.5,
-        strokeColor: DEFAULT_STROKE_COLOR,
+        strokeWidth: 0.5,
+        strokeColor: INK_STROKE,
         strokeStyle: "solid",
         badge: { show: false, color: "" },
         ring: { show: false, width: 0, color: "" },
+        pulse: false,
     },
     unknown: {
-        radius: 5,
+        radius: 4.5,
         fillColor: "transparent",
         hollow: true,
-        strokeWidth: 1.5,
-        strokeColor: PIN_COLORS.unknown,
+        strokeWidth: 0.5,
+        strokeColor: INK_STROKE,
         strokeStyle: "dashed",
         badge: { show: false, color: "" },
         ring: { show: false, width: 0, color: "" },
+        pulse: false,
     },
     flagged: {
-        radius: 6,
+        radius: 4.5,
         fillColor: "transparent",
         hollow: true,
-        strokeWidth: 2,
+        strokeWidth: 1,
         strokeColor: "#DC2626",  // Red for flagged
         strokeStyle: "dashed",
         badge: { show: true, color: "#DC2626", symbol: "!" },
         ring: { show: false, width: 0, color: "" },
+        pulse: false,
     },
 };
 
@@ -178,7 +191,7 @@ export const INTERACTION_STYLES: InteractionStyles = {
     active: {
         haloRadius: 16,
         haloOpacity: 0.25,
-        haloColor: "#007C7C",  // Teal halo
+        haloColor: "#E08E5F",  // Ember halo
     },
 };
 

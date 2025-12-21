@@ -1,10 +1,17 @@
 "use client";
 
-import { useEffect, useCallback } from "react";
+import { useEffect, useCallback, useState, useMemo } from "react";
 import type { PropertyPublic } from "@/types/property";
 import { PropertyImage } from "./PropertyImage";
 import { getChipStyle, getPublicLabel, getPinColor } from "@/lib/statusStyles";
 import { type Status } from "@/lib/status";
+import {
+    type ProximityAnchor,
+    processProximityAnchors,
+    MAX_WALK_THRESHOLD_METERS
+} from "@/lib/proximity";
+
+
 
 // =============================================================================
 // PROPERTY CARD PREVIEW (Tier 1 - S04)
@@ -30,6 +37,33 @@ export function PropertyCardPreview({
     onViewHome,
     isMobile = false,
 }: PropertyCardPreviewProps) {
+    // Proximity Guard: State for raw anchor data (cached in state)
+    const [allAnchors, setAllAnchors] = useState<any[]>([]);
+
+    useEffect(() => {
+        const fetchAllAnchors = async () => {
+            if (allAnchors.length > 0) return; // Only fetch once
+            try {
+                const response = await fetch("/api/anchors");
+                const geojson = await response.json();
+                if (geojson.features) {
+                    setAllAnchors(geojson.features);
+                }
+            } catch (err) {
+                console.error("Failed to fetch anchors for cache:", err);
+            }
+        };
+        fetchAllAnchors();
+    }, [allAnchors.length]);
+
+    // Proximity Guard: Memoized processing (runs only when property coordinates change)
+    const proximityAnchors = useMemo(() => {
+        if (!property.lat || !property.lon || allAnchors.length === 0) {
+            return [];
+        }
+        return processProximityAnchors(allAnchors, property.lat, property.lon);
+    }, [property.lat, property.lon, allAnchors]);
+
     // Close on Escape
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
@@ -143,6 +177,26 @@ export function PropertyCardPreview({
                                 </div>
                             )}
 
+                            {/* Proximity Guard - Walk time badges */}
+                            {proximityAnchors.length > 0 ? (
+                                <div className="flex flex-wrap gap-2 mb-4">
+                                    {proximityAnchors.map((anchor) => (
+                                        <span
+                                            key={anchor.id}
+                                            className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-full bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400"
+                                        >
+                                            {anchor.walkMins} min walk to {anchor.name}
+                                        </span>
+                                    ))}
+                                </div>
+                            ) : (
+                                <div className="mb-4">
+                                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-full bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400">
+                                        Quiet residential street
+                                    </span>
+                                </div>
+                            )}
+
                             {/* Primary CTA */}
                             <button
                                 onClick={onViewHome}
@@ -225,6 +279,26 @@ export function PropertyCardPreview({
                                 </span>
                             );
                         })}
+                    </div>
+                )}
+
+                {/* Proximity Guard - Walk time badges */}
+                {proximityAnchors.length > 0 ? (
+                    <div className="flex flex-wrap gap-2 mb-4">
+                        {proximityAnchors.map((anchor) => (
+                            <span
+                                key={anchor.id}
+                                className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-full bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400"
+                            >
+                                {anchor.walkMins} min walk to {anchor.name}
+                            </span>
+                        ))}
+                    </div>
+                ) : (
+                    <div className="mb-4">
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-full bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400">
+                            Quiet residential street
+                        </span>
                     </div>
                 )}
 

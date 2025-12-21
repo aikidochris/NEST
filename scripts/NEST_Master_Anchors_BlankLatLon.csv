@@ -1,0 +1,87 @@
+id,name,anchor_type,subtype,latitude,longitude,ofsted,postcode
+75521f3a-4cd6-4e9c-8cfd-f85bfa3f1868,Appletree Gardens First School,school,primary,,,,NE25 8XY
+15e8d63f-c290-4c90-b2e7-24afc925da22,Collingwood Primary School,school,primary,,,,NE29 7QR
+9a6b074e-42e2-465b-b352-070575ae2519,Cullercoats Primary School,school,primary,,,,NE30 4PF
+55bb7963-782b-4a3d-ada1-27d74ee558a5,John Spence Community High,school,secondary,,,Requires Improvement,NE29 9PU
+6fdf3c44-8832-41c1-ad3f-0475600e50c4,King Edward Primary School,school,primary,,,Outstanding,NE30 2LU
+6f3dd9e3-67d3-4c44-8bc5-697b4042c07f,Kings Priory School,school,secondary,,,Outstanding,NE30 4RF
+7d8ad794-dc07-42dc-87d9-2a98fb3d1f95,Marden High School,school,secondary,,,Good,NE30 3RZ
+253704c2-88f2-43ce-938d-8efaa10db39c,Marine Park First School,school,primary,,,,NE26 1NE
+a799b1f6-53a2-4fc0-a279-a025f8be754d,Monkseaton High School,school,secondary,,,Requires Improvement,NE25 8NH
+10d05593-5ca2-475a-bc4d-156e4b899323,Monkseaton Middle School,school,primary,,,Good,NE25 8JW
+96691af7-fe36-43ed-8578-deed8081284b,New York Primary School,school,primary,,,,NE29 8HH
+aea60f4e-1953-4d6d-8144-eefa4b8fb044,Percy Main Primary School,school,primary,,,Good,NE29 6JD
+d2f26f3c-85a9-4457-9012-ea9f19111a70,Priory Primary School,school,primary,,,,NE30 4QW
+a6cb3d8b-74af-4d27-a03c-5e279d009388,Redesdale Primary School,school,primary,,,,NE30 2HY
+bc053f3a-9372-4eca-b38d-51eeab3b6a43,Rockcliffe First School,school,primary,,,,NE25 8SH
+7ea43bee-f5a8-4d7c-b6b8-97ad9af30a2d,Shiremoor Primary School,school,primary,,,,NE27 0QX
+f1f13eca-fc40-43c3-a611-328173a8ce90,Southridge First School,school,primary,,,,NE25 9PD
+cda5c427-77d6-473a-9b41-2fdc2f2773a1,Valley Gardens Middle School,school,primary,,,Good,NE25 9HA
+57900fa5-d994-4bf5-bc39-862532d65740,Waterville Primary School,school,primary,,,,NE29 6SL
+4481fa01-fdeb-4901-bf16-010229bc103f,Whitley Bay High School,school,secondary,,,Outstanding,NE25 9AS
+3d69b539-bc6b-4a8d-8660-a9d48b98e362,Woodlawn School,school,primary,,,,NE25 9EG
+7cd310d0-6e89-4d52-879e-55ec0b8fd9c4,Brierdene Burn Nature Reserve,spirit_point,park,,,,NE25 8RD
+2e7806bb-2be1-49af-a17e-fcb09beff145,Churchill Playing Fields,spirit_point,park,,,,NE26 3LH
+1564a7f8-76d7-4023-8246-958a722ed97c,Cullercoats Bay Beach,spirit_point,coastal,,,,NE30 4PS
+ee3a69e9-5ea4-4bfe-b005-4e710cee2d2b,King Edwards Bay,spirit_point,coastal,,,,NE30 4BY
+4fe3d4bb-9810-437d-9230-842cf4291ed0,Longsands Beach Access,spirit_point,coastal,,,,NE30 4HH
+4b85540b-6a4d-40bd-a973-dd28f711e16b,Marden Quarry Park,spirit_point,park,,,,NE25 8PN
+c0c2ffe6-d6c1-47eb-b914-39bb9d518fb6,Monkseaton Village,spirit_point,village_center,,,,NE25 8AL
+12bfacbc-0079-4c18-ab8c-40fc39a7a1da,North Shields Fish Quay,spirit_point,village_center,,,,NE30 1HJ
+07184a24-30da-4313-b6df-6577fc6eb3d9,Northumberland Park,spirit_point,park,,,,NE30 2HA
+042308d7-a739-44cc-842b-e054f1eec5fd,Rising Sun Country Park,spirit_point,park,,,,NE12 9SS
+b3e8d273-c45d-444a-93c3-0cc0e85117c4,Tynemouth Park,spirit_point,park,,,,NE30 4NZ
+e08be9b5-827a-4446-86cf-58a0f1ea24f2,Tynemouth Priory Headland,spirit_point,coastal,,,,NE30 4BZ
+5b6b76be-084c-4fb9-9c1a-83d14a00675f,Tynemouth Village,spirit_point,village_center,,,,NE30 4AA
+b663896e-42f0-4a17-88e5-7f745073b10a,Wallsend Parks (St Peters),spirit_point,park,,,,NE28 7PB
+90c406a5-0849-428d-99ee-51822aaee37f,Whitley Bay Promenade,spirit_point,coastal,,,,NE26 1BQ
+c8b602b8-813f-4e67-b832-4ea2edaaf1da,Whitley Bay Town Centre,spirit_point,village_center,,,,NE26 2SF
+b8c47bfb-7372-44ed-8bde-278dbe428a6e,Cullercoats Metro Station,transport,metro,,,,NE30 4PQ
+7d4d2a1a-7af4-4c95-b483-649ef87f21d1,Meadow Well Metro Station,transport,metro,,,,NE29 6BS
+21358979-da17-43d8-a19a-bb55e5d354b3,Monkseaton Metro Station,transport,metro,,,,NE25 9AD
+aa872eba-4833-4d2a-9855-7bdb41d6531f,North Shields Ferry Terminal,transport,ferry,,,,NE29 6EE
+cea65cf8-b456-4197-9649-a4abf79db27b,North Shields Metro Station,transport,metro,,,,NE29 0BH
+ccb0ac4e-7a97-42b6-845b-c23cfef8f67e,Percy Main Metro Station,transport,metro,,,,NE29 6YE
+483f1dd4-b16c-4b30-be99-a7d40af431c9,Shiremoor Metro Station,transport,metro,,,,NE27 0QJ
+c37c2d26-7312-4654-b649-666eb3a57147,Tynemouth Metro Station,transport,metro,,,,NE30 4RF
+cf824162-3c2f-4628-a833-abf456bb988f,West Monkseaton Metro Station,transport,metro,,,,NE25 9DT
+b0e487bf-6df9-45bd-aa0e-2cc44689a04d,Whitley Bay Metro Station,transport,metro,,,,NE26 2QT
+8ce5eb9f-48b4-446e-b5e0-cae77469c7ed,West Monkseaton Metro,transport,metro_station,,,,NE25
+664b0355-52e0-4769-b628-bbcf60b559ea,Monkseaton Metro,transport,metro_station,,,,NE25
+18819d8d-3188-483b-9b9b-bcb95d73ccd3,Whitley Bay Metro,transport,metro_station,,,,NE26
+c6caebcb-ef77-474e-8e9b-747722fd7fde,Cullercoats Metro,transport,metro_station,,,,NE30
+65867bbf-931b-4572-ac66-70b2ae9e0cdd,Tynemouth Metro,transport,metro_station,,,,NE30
+0eaee4ba-41fc-4189-8514-de39b680b7df,Northumberland Park Metro,transport,metro_station,,,,NE29
+b3502115-1350-492f-a0f8-f77cdffc9a31,Shiremoor Metro,transport,metro_station,,,,NE27
+aa41dcd7-5037-45b4-9d5f-109d691c47b8,North Shields Metro,transport,metro_station,,,,NE29
+ffd8359c-b65e-46d7-9c80-9c6809268800,Meadow Well Metro,transport,metro_station,,,,NE29
+1eab9926-1003-4b63-b304-25ea8c1a2739,Percy Main Metro,transport,metro_station,,,,NE29
+3878286c-4bff-4726-a5bb-02a666b92916,Howdon Metro,transport,metro_station,,,,NE28
+d5724553-fabc-4271-b36b-523a7257a804,Wallsend Metro,transport,metro_station,,,,NE28
+8ed913d1-6a20-462a-8302-7aba932e1c6e,Hadrian Road Metro,transport,metro_station,,,,NE28
+fdaf9e76-548e-4a10-9e5c-62cc85b5f646,Rising Sun Country Park (Main Entrance),green,park,,,,NE12
+b615375f-f184-4f2e-9760-be369266d14b,Rising Sun Country Park (East Entrance),green,park,,,,NE12
+b8dc66b3-f35a-448a-a995-9b563b7e021a,Northumberland Park (Main Entrance),green,park,,,,NE29
+462c3211-e869-421e-8478-2bafbd6d4a6a,Churchill Playing Fields (Main Access),green,park,,,,NE30
+962fd6dd-573a-4a2d-a059-583616d9def8,Marden Quarry (Main Access),green,park,,,,NE30
+278057af-b640-4514-8d29-800ef0af6453,Richardson Dees Park (Main Access),green,park,,,,NE28
+b6c09145-491b-422e-b8b0-10c95770f282,Whitley Bay South Promenade Access,green,beach_access,,,,NE26
+ab7a5976-5901-498c-aab4-5e22055c67ea,Whitley Bay North Promenade Access,green,beach_access,,,,NE26
+bc77e0f8-cef7-450b-a340-14ab8667178c,Cullercoats Bay Access (Ramp/Steps),green,beach_access,,,,NE30
+d9dc33a2-a9f3-4350-9dc1-a452321a97f4,King Edward’s Bay Access (Steps),green,beach_access,,,,NE30
+69e6135e-eb1d-4a8c-aeab-818106832081,Tynemouth Longsands North Access,green,beach_access,,,,NE30
+bafac3fe-d83c-4b99-8fbc-af7b895b6219,Tynemouth Longsands South Access,green,beach_access,,,,NE30
+77113211-df82-45b3-b114-f591f079f132,Tesco Extra North Shields (Norham Rd),amenity,supermarket,,,,NE29
+16ad86f3-23f0-43f1-a207-c84dac5c306d,Sainsbury’s Whitley Bay (Newstead Dr),amenity,supermarket,,,,NE25
+06e5a02c-64d2-472a-8115-6f250c0ad80a,Morrisons Whitley Bay (Hillheads Rd),amenity,supermarket,,,,NE25
+a62da04c-ae85-4f3a-b951-4e0762ac2c18,Morrisons North Shields (Collingwood Centre),amenity,supermarket,,,,NE29
+7f379dce-c41f-463f-b496-c24e1e6e4a18,Aldi North Shields (Hawkeys Ln),amenity,supermarket,,,,NE29
+ce3c83e5-b86e-4585-a56b-aa66b20ee801,Lidl North Shields / Preston Grange (Rake Ln),amenity,supermarket,,,,NE29
+7a5e79a1-162b-4790-b19b-251906babc5d,Whitley Bay Town Centre,amenity,local_centre,,,,NE26
+58a1e742-1ca9-470b-930e-20c10c69e988,Monkseaton Front Street,amenity,local_centre,,,,NE25
+aa2d8b58-1da7-4343-9a32-078520acae89,Tynemouth Front Street,amenity,local_centre,,,,NE30
+e5b6e1f5-70b7-4f5c-8502-8601a985e03b,North Shields Town Centre,amenity,local_centre,,,,NE29
+27335471-3d69-4a93-a0f8-6d0469312b5a,North Tyneside General Hospital (Main Entrance),health,hospital,,,,NE29
+2e63864f-70f0-4169-8287-3bc8b39fd09b,Whitley Bay Health Centre (Main Entrance),health,gp_surgery,,,,NE26
+af9769fc-ac78-468d-b86d-d92d7134abbc,Preston Grange Medical Centre (Main Entrance),health,gp_surgery,,,,NE25
+5b69f58e-bd5d-4a32-88e0-194ea1c48c88,Spring Terrace Health Centre (Main Entrance),health,gp_surgery,,,,NE29

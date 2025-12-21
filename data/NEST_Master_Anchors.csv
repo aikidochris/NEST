@@ -1,0 +1,60 @@
+id,name,anchor_type,subtype,postcode,latitude,longitude,metadata,created_at
+75521f3a-4cd6-4e9c-8cfd-f85bfa3f1868,Appletree Gardens First School,school,primary,NE25 8XY,55.0372405,-1.463989656,,2025-12-19 10:13:24.879826+00
+15e8d63f-c290-4c90-b2e7-24afc925da22,Collingwood Primary School,school,primary,NE29 7QR,55.0082514,-1.4705866,,2025-12-19 10:13:24.879826+00
+9a6b074e-42e2-465b-b352-070575ae2519,Cullercoats Primary School,school,primary,NE30 4PF,55.03356658,-1.433887211,,2025-12-19 10:13:24.879826+00
+55bb7963-782b-4a3d-ada1-27d74ee558a5,John Spence Community High,school,secondary,NE29 9PU,55.02213532,-1.450865616,,2025-12-19 10:13:24.879826+00
+6fdf3c44-8832-41c1-ad3f-0475600e50c4,King Edward Primary School,school,primary,NE30 2LU,55.01668723,-1.444829018,,2025-12-19 10:13:24.879826+00
+6f3dd9e3-67d3-4c44-8bc5-697b4042c07f,Kings Priory School,school,secondary,NE30 4RF,55.01733539,-1.426851931,,2025-12-19 10:13:24.879826+00
+7d8ad794-dc07-42dc-87d9-2a98fb3d1f95,Marden High School,school,secondary,NE30 3RZ,55.0279915,-1.4407909,,2025-12-19 10:13:24.879826+00
+253704c2-88f2-43ce-938d-8efaa10db39c,Marine Park First School,school,primary,NE26 1NE,55.0467599,-1.4489107,,2025-12-19 10:13:24.879826+00
+a799b1f6-53a2-4fc0-a279-a025f8be754d,Monkseaton High School,school,secondary,NE25 8NH,55.03084147,-1.466586402,,2025-12-19 10:13:24.879826+00
+10d05593-5ca2-475a-bc4d-156e4b899323,Monkseaton Middle School,school,primary,NE25 8JW,55.03900812,-1.463618523,,2025-12-19 10:13:24.879826+00
+96691af7-fe36-43ed-8578-deed8081284b,New York Primary School,school,primary,NE29 8HH,55.02125555,-1.484280329,,2025-12-19 10:13:24.879826+00
+aea60f4e-1953-4d6d-8144-eefa4b8fb044,Percy Main Primary School,school,primary,NE29 6JD,54.99678442,-1.474261581,,2025-12-19 10:13:24.879826+00
+d2f26f3c-85a9-4457-9012-ea9f19111a70,Priory Primary School,school,primary,NE30 4QW,55.01747662,-1.42683059,,2025-12-19 10:13:24.879826+00
+bc053f3a-9372-4eca-b38d-51eeab3b6a43,Rockcliffe First School,school,primary,NE25 8SH,55.04037664,-1.433947759,,2025-12-19 10:13:24.879826+00
+7ea43bee-f5a8-4d7c-b6b8-97ad9af30a2d,Shiremoor Primary School,school,primary,NE27 0QX,55.03330515,-1.509456773,,2025-12-19 10:13:24.879826+00
+f1f13eca-fc40-43c3-a611-328173a8ce90,Southridge First School,school,primary,NE25 9PD,55.04973055,-1.47079321,,2025-12-19 10:13:24.879826+00
+cda5c427-77d6-473a-9b41-2fdc2f2773a1,Valley Gardens Middle School,school,primary,NE25 9HA,55.0466767,-1.4694395,,2025-12-19 10:13:24.879826+00
+57900fa5-d994-4bf5-bc39-862532d65740,Waterville Primary School,school,primary,NE29 6SL,55.00407366,-1.454713471,,2025-12-19 10:13:24.879826+00
+4481fa01-fdeb-4901-bf16-010229bc103f,Whitley Bay High School,school,secondary,NE25 9AS,55.04756316,-1.466764354,,2025-12-19 10:13:24.879826+00
+3d69b539-bc6b-4a8d-8660-a9d48b98e362,Woodlawn School,school,primary,NE25 9EG,55.0353634,-1.4736646,,2025-12-19 10:13:24.879826+00
+7cd310d0-6e89-4d52-879e-55ec0b8fd9c4,Brierdene Nature Walk,spirit_point,park,NE25 8RD,55.05767114,-1.456427252,,2025-12-19 10:13:24.879826+00
+2e7806bb-2be1-49af-a17e-fcb09beff145,Churchill Playing Fields,spirit_point,park,NE26 3LH,55.04644325,-1.459865818,,2025-12-19 10:13:24.879826+00
+1564a7f8-76d7-4023-8246-958a722ed97c,Cullercoats Bay Beach,spirit_point,coastal,NE30 4PS,55.0342815,-1.431799312,,2025-12-19 10:13:24.879826+00
+ee3a69e9-5ea4-4bfe-b005-4e710cee2d2b,King Edwards Bay,spirit_point,coastal,NE30 4BY,55.01967125,-1.420758222,,2025-12-19 10:13:24.879826+00
+4fe3d4bb-9810-437d-9230-842cf4291ed0,Longsands Beach,spirit_point,coastal,NE30 4HH,55.0302059,-1.429854519,,2025-12-19 10:13:24.879826+00
+4b85540b-6a4d-40bd-a973-dd28f711e16b,Marden Quarry Park,spirit_point,park,NE25 8PN,55.03648996,-1.446758998,,2025-12-19 10:13:24.879826+00
+c0c2ffe6-d6c1-47eb-b914-39bb9d518fb6,Monkseaton Village,spirit_point,village_center,NE25 8AL,55.04107265,-1.463883275,,2025-12-19 10:13:24.879826+00
+12bfacbc-0079-4c18-ab8c-40fc39a7a1da,North Shields Fish Quay,spirit_point,village_center,NE30 1HJ,55.00979456,-1.435044202,,2025-12-19 10:13:24.879826+00
+07184a24-30da-4313-b6df-6577fc6eb3d9,Northumberland Park,spirit_point,park,NE30 2HA,55.01649868,-1.434872574,,2025-12-19 10:13:24.879826+00
+042308d7-a739-44cc-842b-e054f1eec5fd,Rising Sun Country Park,spirit_point,park,NE12 9SS,55.02036519,-1.528843046,,2025-12-19 10:13:24.879826+00
+b3e8d273-c45d-444a-93c3-0cc0e85117c4,Tynemouth Park,spirit_point,park,NE30 4NZ,55.02570662,-1.430069802,,2025-12-19 10:13:24.879826+00
+e08be9b5-827a-4446-86cf-58a0f1ea24f2,Tynemouth Priory Headland,spirit_point,coastal,NE30 4BZ,55.0176508,-1.417375087,,2025-12-19 10:13:24.879826+00
+5b6b76be-084c-4fb9-9c1a-83d14a00675f,Tynemouth Village,spirit_point,village_center,NE30 4AA,55.01771781,-1.425639064,,2025-12-19 10:13:24.879826+00
+90c406a5-0849-428d-99ee-51822aaee37f,Whitley Bay Promenade,spirit_point,coastal,NE26 1BQ,55.04440372,-1.440569302,,2025-12-19 10:13:24.879826+00
+b8c47bfb-7372-44ed-8bde-278dbe428a6e,Cullercoats Metro Station,transport,metro,NE30 4PQ,55.03510261,-1.436203331,,2025-12-19 10:13:24.879826+00
+7d4d2a1a-7af4-4c95-b483-649ef87f21d1,Meadow Well Metro Station,transport,metro,NE29 6BS,55.00165009,-1.465698584,,2025-12-19 10:13:24.879826+00
+21358979-da17-43d8-a19a-bb55e5d354b3,Monkseaton Metro Station,transport,metro,NE25 9AD,55.04241385,-1.458122518,,2025-12-19 10:13:24.879826+00
+aa872eba-4833-4d2a-9855-7bdb41d6531f,North Shields Ferry Terminal,transport,ferry,NE29 6EE,55.0037688,-1.4455075,,2025-12-19 10:13:24.879826+00
+cea65cf8-b456-4197-9649-a4abf79db27b,North Shields Metro Station,transport,metro,NE29 0BH,55.00851912,-1.448368056,,2025-12-19 10:13:24.879826+00
+ccb0ac4e-7a97-42b6-845b-c23cfef8f67e,Percy Main Metro Station,transport,metro,NE29 6YE,54.9995953,-1.474585367,,2025-12-19 10:13:24.879826+00
+483f1dd4-b16c-4b30-be99-a7d40af431c9,Shiremoor Metro Station,transport,metro,NE27 0QJ,55.03705978,-1.504762405,,2025-12-19 10:13:24.879826+00
+c37c2d26-7312-4654-b649-666eb3a57147,Tynemouth Metro Station,transport,metro,NE30 4RF,55.01716209,-1.428167929,,2025-12-19 10:13:24.879826+00
+cf824162-3c2f-4628-a833-abf456bb988f,West Monkseaton Metro Station,transport,metro,NE25 9DT,55.0403732,-1.476680767,,2025-12-19 10:13:24.879826+00
+b0e487bf-6df9-45bd-aa0e-2cc44689a04d,Whitley Bay Metro Station,transport,metro,NE26 2QT,55.03999877,-1.442786631,,2025-12-19 10:13:24.879826+00
+0eaee4ba-41fc-4189-8514-de39b680b7df,Northumberland Park Metro,transport,metro,NE29,55.03283169,-1.519920753,,2025-12-19 10:13:24.879826+00
+77113211-df82-45b3-b114-f591f079f132,Tesco Extra North Shields (Norham Rd),amenity,supermarket,NE29,55.0107735,-1.4861766,,2025-12-19 10:13:24.879826+00
+16ad86f3-23f0-43f1-a207-c84dac5c306d,Sainsbury’s Whitley Bay (Newstead Dr),amenity,supermarket,NE25,55.0441352,-1.480495264,,2025-12-19 10:13:24.879826+00
+06e5a02c-64d2-472a-8115-6f250c0ad80a,Morrisons Whitley Bay (Hillheads Rd),amenity,supermarket,NE25,55.0403899,-1.4548958,,2025-12-19 10:13:24.879826+00
+a62da04c-ae85-4f3a-b951-4e0762ac2c18,Morrisons North Shields (Collingwood Centre),amenity,supermarket,NE29,55.02479137,-1.456345731,,2025-12-19 10:13:24.879826+00
+7f379dce-c41f-463f-b496-c24e1e6e4a18,Aldi North Shields (Hawkeys Ln),amenity,supermarket,NE29,55.01017221,-1.45676476,,2025-12-19 10:13:24.879826+00
+ce3c83e5-b86e-4585-a56b-aa66b20ee801,Lidl North Shields / Preston Grange (Rake Ln),amenity,supermarket,NE29,55.0276842,-1.4627459,,2025-12-19 10:13:24.879826+00
+7a5e79a1-162b-4790-b19b-251906babc5d,Whitley Bay Town Centre,spirit_point,village_center,NE26,55.04231737,-1.445591057,,2025-12-19 10:13:24.879826+00
+27335471-3d69-4a93-a0f8-6d0469312b5a,North Tyneside General Hospital,health,hospital,NE29,55.02584621,-1.468073935,,2025-12-19 10:13:24.879826+00
+2e63864f-70f0-4169-8287-3bc8b39fd09b,Whitley Bay Health Centre,health,gp_surgery,NE26,55.04145108,-1.439806502,,2025-12-19 10:13:24.879826+00
+5b69f58e-bd5d-4a32-88e0-194ea1c48c88,Spring Terrace Health Centre,health,gp_surgery,NE29,55.01111928,-1.451317144,,2025-12-19 10:13:24.879826+00
+9f3c7d8a-8b1a-4f6e-bf5b-5d6e1a2c9f01,Marine Avenue Surgery,health,gp_surgery,NE26,55.04393023,-1.457545445,,2025-12-19 10:13:24.879826+00
+2a8e6c9f-3d4e-4c2b-9a71-8e2b6d9f5c44,Monkseaton Medical Centre,health,gp_surgery,NE25,55.03686438,-1.472984973,,2025-12-19 10:13:24.879826+00
+6b0f1c2a-7e4d-4b3a-9c8e-1f5d7a0e9b62,Redburn Park Medical Centre,health,gp_surgery,NE29,55.00102646,-1.475069087,,2025-12-19 10:13:24.879826+00
+d4b2f9e1-0c7a-4f1d-8e3b-6a5c9d2f7e18,Shiremoor Health Centre,health,gp_surgery,NE27,55.03771149,-1.505979385,,2025-12-19 10:13:24.879826+00

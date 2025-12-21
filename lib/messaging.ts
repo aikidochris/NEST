@@ -1,10 +1,122 @@
 import { supabase } from "@/lib/supabase/client";
-import { isInspectOn } from "@/lib/inspect";
+import { isInspectOn, inspectLog } from "@/lib/inspect";
 
 // =============================================================================
 // MESSAGING DATA HELPERS
 // Phase 3 Chunk 1 - No UI, data operations only
 // =============================================================================
+
+/**
+ * Find an existing conversation for a property where BOTH users are participants.
+ * This is the deterministic way to check if a conversation already exists.
+ * 
+ * Returns the newest conversation if multiple exist (and logs a warning).
+ */
+export async function findConversationBetweenUsers(
+    propertyId: string,
+    userAId: string,
+    userBId: string
+): Promise<string | null> {
+    // Query conversations for this property, then filter by participants
+    const { data: conversations, error } = await supabase
+        .from("conversations")
+        .select(`
+            id,
+            updated_at,
+            conversation_participants!inner(user_id)
+        `)
+        .eq("property_id", propertyId);
+
+    if (error) {
+        if (isInspectOn()) {
+            console.error("[messaging] findConversationBetweenUsers error:", error);
+        }
+        return null;
+    }
+
+    if (!conversations || conversations.length === 0) {
+        return null;
+    }
+
+    // Filter to conversations where BOTH users are participants
+    const matchingConvos = conversations.filter((conv) => {
+        const participants = conv.conversation_participants as { user_id: string }[];
+        const participantIds = participants.map(p => p.user_id);
+        return participantIds.includes(userAId) && participantIds.includes(userBId);
+    });
+
+    if (matchingConvos.length === 0) {
+        return null;
+    }
+
+    // Sort by updated_at descending and pick newest
+    matchingConvos.sort((a, b) =>
+        new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
+    );
+
+    const chosen = matchingConvos[0];
+
+    // Log if we had to pick from multiple
+    if (matchingConvos.length > 1 && isInspectOn()) {
+        console.log("[NEST_INSPECT] CONVO_MULTI_PICKED_NEWEST", {
+            property_id: propertyId,
+            chosen_id: chosen.id,
+            all_ids: matchingConvos.map(c => c.id),
+            count: matchingConvos.length,
+        });
+    }
+
+    return chosen.id;
+}
+
+/**
+ * Get an existing conversation between the current user and a property owner.
+ * Returns null if no conversation exists.
+ */
+export async function getConversationForProperty(
+    propertyId: string
+): Promise<{ conversationId: string } | null> {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return null;
+
+    // Get property owner
+    const { data: claim } = await supabase
+        .from("property_claims")
+        .select("user_id")
+        .eq("property_id", propertyId)
+        .eq("status", "claimed")
+        .maybeSingle();
+
+    if (!claim) return null;
+
+    const ownerId = claim.user_id;
+    if (ownerId === user.id) return null; // Owner can't message themselves
+
+    // Check if conversation already exists
+    const { data: existingConvRows, error: convError } = await supabase
+        .from("conversations")
+        .select("id")
+        .eq("property_id", propertyId)
+        .eq("owner_user_id", ownerId)
+        .eq("created_by_user_id", user.id)
+        .order("updated_at", { ascending: false })
+        .limit(1);
+
+    if (convError) {
+        if (isInspectOn()) {
+            console.error("[messaging] Failed to check existing conversation:", convError);
+        }
+        return null; // Fail safe
+    }
+
+    const existingConv = existingConvRows && existingConvRows.length > 0 ? existingConvRows[0] : null;
+
+    if (existingConv) {
+        return { conversationId: existingConv.id };
+    }
+
+    return null;
+}
 
 /**
  * Get or create a conversation between the current user and a property owner.
@@ -14,6 +126,12 @@ import { isInspectOn } from "@/lib/inspect";
 export async function getOrCreateConversationForProperty(
     propertyId: string
 ): Promise<{ conversationId: string }> {
+    // Try to get existing first
+    const existing = await getConversationForProperty(propertyId);
+    if (existing) {
+        return existing;
+    }
+
     // Get current user
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) {
@@ -44,39 +162,6 @@ export async function getOrCreateConversationForProperty(
     // If current user is the owner, don't allow self-messaging
     if (ownerId === user.id) {
         throw new Error("You can't message yourself.");
-    }
-
-    // Check if conversation already exists between user and owner for this property
-    // Use deterministic query to handle potential duplicates: order by updated_at desc, limit 1
-    const { data: existingConvRows, error: convError } = await supabase
-        .from("conversations")
-        .select("id")
-        .eq("property_id", propertyId)
-        .eq("owner_user_id", ownerId)
-        .eq("created_by_user_id", user.id)
-        .order("updated_at", { ascending: false })
-        .limit(1);
-
-    if (convError) {
-        if (isInspectOn()) {
-            console.error("[messaging] Failed to check existing conversation:", convError);
-        }
-        throw new Error("Something went wrong. Please try again.");
-    }
-
-    const existingConv = existingConvRows && existingConvRows.length > 0 ? existingConvRows[0] : null;
-
-    // Inspection log for conversation lookup
-    if (isInspectOn()) {
-        console.log("[NEST_INSPECT] CONVO_LOOKUP_RESULT", {
-            property_id: propertyId,
-            existing_conversation_id: existingConv?.id || null,
-            count: existingConvRows?.length || 0,
-        });
-    }
-
-    if (existingConv) {
-        return { conversationId: existingConv.id };
     }
 
     // Create new conversation
@@ -564,3 +649,186 @@ export async function listConversationsForProperty(
 
     return previews;
 }
+
+// =============================================================================
+// GLOBAL INBOX - Flat list of all conversations for current user
+// =============================================================================
+
+export interface InboxConversation {
+    conversation_id: string;
+    property_id: string;
+    property_label: string;
+    lat: number | null;
+    lon: number | null;
+    counterparty_label: string;
+    last_message: string | null;
+    last_message_at: string;
+}
+
+/**
+ * List all conversations for the current user across all properties.
+ * Returns a flat list sorted by most recent activity (last_message_at desc).
+ */
+export async function listAllConversationsFlat(): Promise<InboxConversation[]> {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+        return [];
+    }
+
+    // Step 1: Get all conversations where user is a participant
+    if (isInspectOn()) {
+        const { data: authDataPart } = await supabase.auth.getUser();
+        console.debug("[inspect] AUTH USER BEFORE PARTICIPANT SELECT:", authDataPart?.user);
+    }
+
+    const { data: participations, error: partError } = await supabase
+        .from("conversation_participants")
+        .select(`
+            conversation_id,
+            role,
+            conversations!inner (
+                id,
+                property_id,
+                owner_user_id,
+                created_by_user_id,
+                updated_at
+            )
+        `)
+        .eq("user_id", user.id);
+
+    if (partError) {
+        console.error("RAW ERROR (participant SELECT):", partError);
+        console.error("ERROR JSON:", JSON.stringify(partError, null, 2));
+        console.error("ERROR KEYS:", partError ? Object.keys(partError) : null);
+        console.error("ERROR CODE:", (partError as unknown as Record<string, unknown>)?.code);
+        console.error("ERROR MESSAGE:", (partError as unknown as Record<string, unknown>)?.message);
+        console.error("ERROR DETAILS:", (partError as unknown as Record<string, unknown>)?.details);
+        console.error("ERROR HINT:", (partError as unknown as Record<string, unknown>)?.hint);
+        if (isInspectOn()) {
+            console.error("[messaging] listAllConversationsFlat participations error:", partError);
+        }
+        return [];
+    }
+
+    if (!participations || participations.length === 0) {
+        return [];
+    }
+
+    // Extract conversation data with role info
+    const conversationsData = participations.map((p: Record<string, unknown>) => {
+        const conv = p.conversations as Record<string, unknown>;
+        return {
+            conversation_id: conv.id as string,
+            property_id: conv.property_id as string,
+            owner_user_id: conv.owner_user_id as string,
+            created_by_user_id: conv.created_by_user_id as string,
+            updated_at: conv.updated_at as string,
+            role: p.role as string,
+        };
+    });
+
+    // Deduplicate by (property_id + counterparty user) - keep newest by updated_at
+    // Counterparty is: owner_user_id for viewers, created_by_user_id for owners
+    // This collapses multiple conversations for the same property-counterparty pair
+    const dedupeKey = (c: typeof conversationsData[0]) => {
+        const counterpartyId = c.role === "owner" ? c.created_by_user_id : c.owner_user_id;
+        return `${c.property_id}::${counterpartyId}`;
+    };
+
+    // Sort by updated_at desc first so we pick the newest
+    conversationsData.sort((a, b) =>
+        new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
+    );
+
+    const seenKeys = new Map<string, string[]>(); // key -> all conversation_ids with that key
+    const uniqueConversations: typeof conversationsData = [];
+
+    for (const conv of conversationsData) {
+        const key = dedupeKey(conv);
+        if (!seenKeys.has(key)) {
+            seenKeys.set(key, [conv.conversation_id]);
+            uniqueConversations.push(conv);
+        } else {
+            // Track duplicates for logging
+            seenKeys.get(key)!.push(conv.conversation_id);
+        }
+    }
+
+    // Log any collapsed duplicates (inspect mode only)
+    for (const [key, ids] of seenKeys) {
+        if (ids.length > 1) {
+            const [property_id] = key.split("::");
+            inspectLog("INBOX_DEDUPE_COLLAPSED", {
+                property_id,
+                conversation_ids: ids,
+                kept_newest: ids[0],
+                collapsed_count: ids.length - 1,
+            });
+        }
+    }
+
+    // Step 2: Get last message for each conversation
+    const conversationIds = uniqueConversations.map(c => c.conversation_id);
+
+    const { data: lastMessages } = await supabase
+        .from("messages")
+        .select("conversation_id, body, created_at")
+        .in("conversation_id", conversationIds)
+        .order("created_at", { ascending: false });
+
+    // Create a map of conversation_id -> last message (first occurrence = most recent)
+    const lastMessageMap = new Map<string, { body: string; created_at: string }>();
+    for (const msg of (lastMessages || [])) {
+        if (!lastMessageMap.has(msg.conversation_id)) {
+            lastMessageMap.set(msg.conversation_id, { body: msg.body, created_at: msg.created_at });
+        }
+    }
+
+    // Step 3: Get property details
+    const propertyIds = [...new Set(uniqueConversations.map(c => c.property_id))];
+
+    const { data: properties } = await supabase
+        .from("property_public_view")
+        .select("property_id, display_label, lat, lon")
+        .in("property_id", propertyIds);
+
+    // Create a map of property_id -> property details
+    const propertyMap = new Map<string, { label: string; lat: number | null; lon: number | null }>();
+    for (const prop of (properties || [])) {
+        propertyMap.set(prop.property_id, {
+            label: prop.display_label || "Unknown address",
+            lat: prop.lat,
+            lon: prop.lon,
+        });
+    }
+
+    // Step 4: Build flat list
+    const result: InboxConversation[] = [];
+
+    for (const conv of uniqueConversations) {
+        const propInfo = propertyMap.get(conv.property_id) || { label: "Unknown address", lat: null, lon: null };
+        const lastMsg = lastMessageMap.get(conv.conversation_id);
+
+        // Counterparty label: if user is owner, counterparty is "Neighbour"; else "Owner"
+        const counterpartyLabel = conv.role === "owner" ? "Neighbour" : "Owner";
+
+        result.push({
+            conversation_id: conv.conversation_id,
+            property_id: conv.property_id,
+            property_label: propInfo.label,
+            lat: propInfo.lat,
+            lon: propInfo.lon,
+            counterparty_label: counterpartyLabel,
+            last_message: lastMsg?.body || null,
+            last_message_at: lastMsg?.created_at || conv.updated_at,
+        });
+    }
+
+    // Sort by most recent activity
+    result.sort((a, b) =>
+        new Date(b.last_message_at).getTime() - new Date(a.last_message_at).getTime()
+    );
+
+    return result;
+}
+
