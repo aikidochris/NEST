@@ -70,3 +70,58 @@ export async function isPropertyMine(
 
     return !!data;
 }
+
+/**
+ * Unclaim a property - removes the user's claim and resets the property to unclaimed state.
+ * Security: Only the current owner can unclaim their property.
+ * @returns true if successful, false otherwise
+ */
+export async function unclaimProperty(
+    supabase: SupabaseClient,
+    propertyId: string
+): Promise<{ success: boolean; error?: string }> {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+        return { success: false, error: "Not authenticated" };
+    }
+
+    // First verify the user owns this property
+    const { data: existingClaim, error: checkError } = await supabase
+        .from("property_claims")
+        .select("id")
+        .eq("property_id", propertyId)
+        .eq("user_id", user.id)
+        .eq("status", "claimed")
+        .maybeSingle();
+
+    if (checkError) {
+        if (isInspectOn()) {
+            console.error("[ownership] Failed to verify ownership:", checkError);
+        }
+        return { success: false, error: "Failed to verify ownership" };
+    }
+
+    if (!existingClaim) {
+        return { success: false, error: "You do not own this property" };
+    }
+
+    // Delete the claim record
+    const { error: deleteError } = await supabase
+        .from("property_claims")
+        .delete()
+        .eq("property_id", propertyId)
+        .eq("user_id", user.id);
+
+    if (deleteError) {
+        if (isInspectOn()) {
+            console.error("[ownership] Failed to delete claim:", deleteError);
+        }
+        return { success: false, error: "Failed to unclaim property" };
+    }
+
+    if (isInspectOn()) {
+        console.log("[ownership] Property unclaimed successfully:", propertyId);
+    }
+
+    return { success: true };
+}

@@ -113,6 +113,12 @@ function mapProperty(p: RawProperty, userId: string | null) {
         status, // Unified status for instant map filtering
         summary_text: p.summary_text,
         is_mine: userId !== null && p.claimed_by_user_id === userId,
+        // Default values for extended fields (injected later for high-fidelity mocks)
+        metadata: {} as Record<string, any>,
+        hero_image_url: null as string | null,
+        thumbnail_url: null as string | null,
+        cover_image_url: null as string | null,
+        public_images: [] as any[],
     };
 }
 
@@ -180,7 +186,76 @@ export async function GET(request: NextRequest): Promise<Response> {
             }
 
             const rawProperty = data as unknown as RawProperty;
-            const propertyWithMine = mapProperty(rawProperty, userId);
+            let propertyWithMine = mapProperty(rawProperty, userId);
+
+            // High-Fidelity Mock for '79 The Links'
+            if (propertyWithMine.house_number === '79' && (propertyWithMine.street?.includes('Links') || propertyWithMine.display_label?.includes('Links'))) {
+                const vibeZoneKey = "Whitley Bay (Central)";
+                const heroUrl = `${supabaseUrl}/storage/v1/object/public/Vibe%20Zones/${encodeURIComponent(vibeZoneKey)}_hero.jpg`;
+
+                propertyWithMine = {
+                    ...propertyWithMine,
+                    summary_text: "A home defined by its proximity to the water. We love the way the light hits the kitchen at 8 AM and the fact that you can be on the coastal path in under two minutes. It’s been the perfect place to raise a family.",
+                    hero_image_url: heroUrl,
+                    metadata: {
+                        ...propertyWithMine.metadata,
+                        headline: "Coastal Sanctuary on The Links",
+                        price_estimate: "£420k–£450k",
+                        owner: {
+                            name: "Sarah & Ben",
+                            avatar: "https://api.dicebear.com/7.x/avataaars/svg?seed=SarahAndBen"
+                        },
+                        facts: {
+                            beds: "3 Bed",
+                            baths: "2 Bath",
+                            sqft: "1,240 sq ft",
+                            epc: "B"
+                        }
+                    },
+                    public_images: [
+                        {
+                            id: "int-1",
+                            property_id: propertyId,
+                            url: "https://images.unsplash.com/photo-1600585154340-be6161a56a0c?q=80&w=1200",
+                            kind: "album",
+                            album_key: "interiors",
+                            visibility: "public",
+                            sort_order: 1,
+                            created_at: new Date().toISOString()
+                        },
+                        {
+                            id: "int-2",
+                            property_id: propertyId,
+                            url: "https://images.unsplash.com/photo-1600566753190-17f0baa2a6c3?q=80&w=1200",
+                            kind: "album",
+                            album_key: "interiors",
+                            visibility: "public",
+                            sort_order: 2,
+                            created_at: new Date().toISOString()
+                        },
+                        {
+                            id: "int-3",
+                            property_id: propertyId,
+                            url: "https://images.unsplash.com/photo-1600210492486-724fe5c67fb0?q=80&w=1200",
+                            kind: "album",
+                            album_key: "interiors",
+                            visibility: "public",
+                            sort_order: 3,
+                            created_at: new Date().toISOString()
+                        },
+                        {
+                            id: "int-4",
+                            property_id: propertyId,
+                            url: "https://images.unsplash.com/photo-1616486338812-3dadae4b4ace?q=80&w=1200",
+                            kind: "album",
+                            album_key: "interiors",
+                            visibility: "public",
+                            sort_order: 4,
+                            created_at: new Date().toISOString()
+                        }
+                    ]
+                };
+            }
 
             return NextResponse.json(
                 { ok: true, data: propertyWithMine },

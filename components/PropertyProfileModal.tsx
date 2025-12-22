@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useMemo } from "react";
+import { motion } from "framer-motion";
 import type { PropertyPublic, PropertyImage as PropertyImageType } from "@/types/property";
 import { PropertyImage } from "./PropertyImage";
 import { PropertyImageLightbox } from "./PropertyImageLightbox";
@@ -11,6 +12,7 @@ import { OwnerInboxPreview } from "./OwnerInboxPreview";
 import { getChipStyle, getPublicLabel, getPinColor } from "@/lib/statusStyles";
 import { resolveStatus, type Status } from "@/lib/status";
 import { isInspectOn } from "@/lib/inspect";
+import { getVibeZoneAtCoordinate, getVibeAssetUrl } from "@/lib/vibeZones";
 import { listConversationsForProperty, getConversationForProperty } from "@/lib/messaging";
 import {
     type ProximityAnchor,
@@ -50,6 +52,8 @@ interface PropertyProfileModalProps {
     initialConversationId?: string | null;
     /** Callback when navigating to a neighbour property */
     onSelectNeighbour?: (propertyId: string, lat?: number, lon?: number) => void;
+    /** Callback when owner unclaims their property */
+    onUnclaim?: () => Promise<void>;
 }
 
 // Mock image data for development (will be fetched from API later)
@@ -101,7 +105,6 @@ function getMockImages(property: PropertyPublic): PropertyImageType[] {
 
 /**
  * Tier 2 Full Property Profile Overlay.
- * Shows gallery grid, full story, and conditional action buttons.
  */
 export function PropertyProfileModal({
     property,
@@ -118,6 +121,7 @@ export function PropertyProfileModal({
     initialOpenMode = "card",
     initialConversationId = null,
     onSelectNeighbour,
+    onUnclaim,
 }: PropertyProfileModalProps) {
     const [images, setImages] = useState<PropertyImageType[]>([]);
     const [lightboxImage, setLightboxImage] = useState<{ src: string; alt: string } | null>(null);
@@ -147,10 +151,20 @@ export function PropertyProfileModal({
     const [proximityAnchors, setProximityAnchors] = useState<ProximityAnchor[]>([]);
     const [isFactsExpanded, setIsFactsExpanded] = useState(false);
 
-    // Load images (mocked for now)
+    // Load images (mocked + real)
     useEffect(() => {
-        setImages(getMockImages(property));
+        const mock = getMockImages(property);
+        const real = property.public_images || [];
+        // dedupe by URL if necessary, but here we just combine
+        setImages([...real, ...mock.filter(m => !real.some(r => r.url === m.url))]);
     }, [property]);
+
+    // Resolve Vibe Zone for neighborhood imagery and theme
+    const vibeZone = useMemo(() => {
+        return getVibeZoneAtCoordinate(property.lat, property.lon);
+    }, [property.lat, property.lon]);
+
+    const themeColor = vibeZone?.themeColor || "#E08E5F";
 
     // Proximity Guard: State for raw anchor data (cached in state)
     const [allAnchors, setAllAnchors] = useState<any[]>([]);
@@ -407,43 +421,71 @@ export function PropertyProfileModal({
         ? images.filter(img => img.visibility === "private" || img.visibility === "followers")
         : [];
 
-    // Hero Media Priority: hero_image_url || thumbnail_url || cover_image_url || fallback
-    const heroMediaSrc = property.hero_image_url || property.thumbnail_url || property.cover_image_url || '/placeholder-home.jpg';
+    // Hero Media Priority: Neighborhood/Zone Hero Image as cinematic fallback
+    const zoneHeroUrl = vibeZone ? getVibeAssetUrl(vibeZone.assetKey, 'hero') : null;
+    const heroMediaSrc = property.hero_image_url || property.thumbnail_url || property.cover_image_url || zoneHeroUrl || '/placeholder-home.jpg';
 
     // Vibe Subtitle Priority: metadata->'vibe_label' || metadata->'story_summary' || summary_text || fallback
-    const vibeSubtitle = property.metadata?.vibe_label || property.metadata?.story_summary || property.summary_text || "Neighborhood Vibe";
+    const vibeSubtitle = property.metadata?.vibe_label || vibeZone?.punchline || property.summary_text || "Neighborhood Vibe";
+
+    // Metadata overrides
+    const headline = property.metadata?.headline;
+    const priceEstimate = property.metadata?.price_estimate;
+    const ownerInfo = property.metadata?.owner as { name?: string; avatar?: string } | undefined;
+    const customFacts = property.metadata?.facts as { beds?: string; baths?: string; sqft?: string; epc?: string } | undefined;
 
     return (
         <>
-            <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-                {/* Backdrop with extreme blur and 'Ember' glow saturates/sepia */}
-                <div
-                    className="absolute inset-0 bg-black/40 backdrop-blur-[24px] backdrop-saturate-[1.2] backdrop-sepia-[0.2]"
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 pt-20">
+                {/* Backdrop with 'Deep Focus' filter */}
+                <motion.div
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    className="absolute inset-0 bg-black/30 backdrop-blur-[12px] backdrop-brightness-[0.7]"
                     onClick={onClose}
                 />
 
-                {/* Modal with radial gradient background overlay */}
-                <div
-                    className="relative rounded-2xl shadow-2xl w-full max-w-2xl max-h-[95vh] overflow-hidden flex flex-col"
-                    style={{
-                        background: 'radial-gradient(circle, rgba(224,142,95,0.05) 0%, rgba(249,247,242,0.95) 100%)',
-                        backdropFilter: 'blur(12px)'
-                    }}
+                {/* Modal Container: Hearth Glass DNA */}
+                <motion.div
+                    layoutId={`property-card-${property.property_id}`}
+                    initial={{ opacity: 0, scale: 0.95 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, scale: 0.95 }}
+                    transition={{ type: "spring", stiffness: 300, damping: 25 }}
+                    className="relative rounded-[32px] shadow-2xl w-full max-w-2xl max-h-[calc(100vh-6rem)] overflow-hidden flex flex-col bg-white/80 backdrop-blur-xl border border-white/40"
                     role="dialog"
                     aria-modal="true"
                     aria-labelledby="profile-modal-title"
                 >
-                    {/* Header: Cinematic 16:10 Full-bleed */}
-                    <div className="relative aspect-[16/10] w-full overflow-hidden flex-shrink-0">
-                        <img
+                    {/* Header: Cinematic context (Height ~180px) */}
+                    <div className="relative h-[180px] w-full overflow-hidden flex-shrink-0 group">
+                        <motion.img
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                            transition={{ duration: 0.3 }}
                             src={heroMediaSrc}
                             alt={title}
-                            className="w-full h-full object-cover cursor-pointer hover:scale-105 transition-transform duration-700"
+                            className="w-full h-full object-cover transition-transform duration-1000 group-hover:scale-105"
                             onClick={() => setLightboxImage({ src: heroMediaSrc, alt: title })}
                         />
 
+                        {/* Soft gradient mask to blend with content */}
+                        <div className="absolute inset-0 bg-gradient-to-t from-white/80 via-transparent to-transparent opacity-100" />
+
+                        {/* Close Button (Top right on glass) */}
+                        <button
+                            onClick={onClose}
+                            className="absolute top-4 right-4 p-2 bg-black/10 hover:bg-black/20 rounded-full text-gray-800 transition-colors backdrop-blur-md border border-white/20 z-10"
+                            aria-label="Close"
+                        >
+                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                            </svg>
+                        </button>
+
                         {/* Status Overlay */}
-                        <div className="absolute top-4 left-4 flex gap-2">
+                        <div className="absolute top-4 left-4 flex gap-2 z-10">
                             {intentStatuses.map((status) => {
                                 const { bg, text } = getChipStyle(status);
                                 const label = getPublicLabel(status);
@@ -451,74 +493,99 @@ export function PropertyProfileModal({
                                 return (
                                     <span
                                         key={status}
-                                        className={`px-3 py-1 text-[10px] font-bold tracking-wider uppercase rounded-full backdrop-blur-md shadow-lg ${bg} ${text}`}
+                                        className={`px-3 py-1 text-[10px] font-bold tracking-widest uppercase rounded-full backdrop-blur-md shadow-lg border border-white/20 ${bg} ${text}`}
                                     >
                                         {label}
                                     </span>
                                 );
                             })}
                         </div>
+
+                        {/* Price Estimate Pill (Top Right) */}
+                        {priceEstimate && (
+                            <div className="absolute top-4 right-16 px-4 py-2 bg-white/90 backdrop-blur-md rounded-full border border-white/50 shadow-xl z-20">
+                                <p className="text-[10px] font-bold uppercase tracking-widest text-[#E08E5F] mb-0.5">Est. Value</p>
+                                <p className="text-sm font-bold text-gray-900">{priceEstimate}</p>
+                            </div>
+                        )}
                     </div>
 
                     {/* Scrollable Content */}
                     <div className="flex-1 overflow-y-auto no-scrollbar">
                         <div className="px-6 py-6 pb-24">
                             {/* Header Info */}
-                            <div className="mb-6">
-                                <h2
+                            <div className="mb-8">
+                                <h1
                                     id="profile-modal-title"
-                                    className="text-3xl font-serif text-gray-900 mb-1"
+                                    className="text-4xl font-bold tracking-tight text-gray-900 mb-3"
+                                    style={{ color: themeColor }}
                                 >
                                     {title}
-                                </h2>
-                                <p className="text-amber-700/80 font-serif italic text-sm mb-4">
-                                    {vibeSubtitle}
-                                </p>
+                                </h1>
 
-                                {/* Proximity Guard */}
-                                <div className="mb-8">
+                                {/* Headline / Vibe Tag / Subtitle */}
+                                <div className="flex flex-col gap-1">
+                                    <p className="text-gray-900 font-serif italic text-2xl leading-relaxed mb-1">
+                                        {headline || vibeSubtitle}
+                                    </p>
+                                    {headline && (
+                                        <p className="text-gray-500 font-serif italic text-lg leading-relaxed mb-2 opacity-80">
+                                            {vibeSubtitle}
+                                        </p>
+                                    )}
+                                    <div className="flex items-center gap-2 mt-2">
+                                        <div
+                                            className="px-3 py-1 bg-white/50 backdrop-blur-sm rounded-full text-xs font-semibold tracking-wide border border-white/50 shadow-sm"
+                                            style={{ color: themeColor, backgroundColor: `${themeColor}10` }}
+                                        >
+                                            {vibeZone?.punchline || "Quiet residential pocket"}
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* Proximity Indicators */}
+                                <div className="mt-8 flex flex-wrap gap-2">
                                     {proximityPills.length === 0 ? (
-                                        <div className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-gray-100/50 rounded-full text-[10px] font-medium text-gray-500">
-                                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <div className="flex items-center gap-2 px-3 py-2 bg-white/40 border border-white/50 rounded-xl text-xs text-gray-500">
+                                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
                                             </svg>
-                                            Quiet residential pocket
+                                            <span>Suburban sanctuary</span>
                                         </div>
                                     ) : (
-                                        <div className="flex flex-wrap gap-2">
-                                            {proximityPills.map((anchor: ProximityAnchor) => (
-                                                <div
-                                                    key={anchor.id}
-                                                    className="flex items-center gap-1.5 px-3 py-2 bg-white/60 backdrop-blur-sm border border-gray-100 shadow-sm rounded-lg text-[10px] font-semibold text-gray-700"
-                                                >
-                                                    {anchor.category === 'school' && '🎓'}
-                                                    {anchor.category === 'transport' && '🚆'}
-                                                    {anchor.category === 'spirit' && '🍃'}
-                                                    {anchor.category === 'amenity' && '☕'}
-                                                    <span>{anchor.walkMins} min walk to {anchor.name}</span>
-                                                </div>
-                                            ))}
-                                        </div>
+                                        proximityPills.slice(0, 3).map((anchor: ProximityAnchor) => (
+                                            <div
+                                                key={anchor.id}
+                                                className="flex items-center gap-2 px-3 py-2 bg-white/40 backdrop-blur-sm border border-white/50 shadow-sm rounded-xl text-xs font-medium text-gray-700"
+                                            >
+                                                <span>{anchor.category === 'school' ? '🎓' : anchor.category === 'transport' ? '🚆' : '📍'}</span>
+                                                <span>{anchor.walkMins} min walk</span>
+                                            </div>
+                                        ))
                                     )}
                                 </div>
                             </div>
 
-                            {/* From the Owner (Editorial Section) */}
-                            <div className="mb-10 bg-[#FAF9F6] border border-gray-100/50 rounded-2xl p-6 shadow-sm">
-                                <div className="flex items-center justify-between mb-4">
-                                    <h3 className="text-lg font-serif italic text-gray-800">From the Owner</h3>
-                                    <div className="w-10 h-10 rounded-full overflow-hidden bg-gray-200 border-2 border-white shadow-sm ring-1 ring-gray-100">
-                                        <img
-                                            src="https://api.dicebear.com/7.x/avataaars/svg?seed=Felix"
-                                            alt="Owner"
-                                            className="w-full h-full object-cover"
-                                        />
+                            {/* Story Section: Emotional Core (Redesigned) */}
+                            <div className="mb-12 relative">
+                                <div className="absolute -top-6 -left-2 text-6xl text-orange-200/50 font-serif leading-none italic select-none">“</div>
+                                <div className="bg-orange-50/40 backdrop-blur-md border border-orange-100/50 rounded-[24px] p-8 shadow-inner shadow-orange-900/5 relative overflow-hidden">
+                                    <div className="flex items-center justify-between mb-6">
+                                        <div className="flex flex-col">
+                                            <h3 className="text-sm font-bold tracking-[0.2em] uppercase text-orange-300">The Story</h3>
+                                            <p className="text-xs text-gray-400 font-medium">From {ownerInfo?.name || "the current owner"}</p>
+                                        </div>
+                                        <div className="w-12 h-12 rounded-full overflow-hidden border-2 border-white shadow-md ring-4 ring-orange-50/30">
+                                            <img
+                                                src={ownerInfo?.avatar || "https://api.dicebear.com/7.x/avataaars/svg?seed=Felix"}
+                                                alt={ownerInfo?.name || "Owner"}
+                                                className="w-full h-full object-cover"
+                                            />
+                                        </div>
                                     </div>
-                                </div>
-                                <div className="space-y-4">
-                                    <p className="text-gray-700 text-sm leading-relaxed font-serif italic opacity-90">
-                                        "{story}"
-                                    </p>
+                                    <blockquote className="text-gray-800 text-xl md:text-2xl leading-relaxed font-serif italic opacity-95">
+                                        {story}
+                                    </blockquote>
                                 </div>
                             </div>
 
@@ -540,19 +607,19 @@ export function PropertyProfileModal({
                                 </button>
                                 {isFactsExpanded && (
                                     <div className="pb-6 grid grid-cols-2 gap-4">
-                                        <div className="bg-white/40 p-3 rounded-xl border border-gray-100">
+                                        <div className="bg-white/40 p-3 rounded-xl border border-white/50">
                                             <p className="text-[10px] uppercase tracking-widest text-gray-400 mb-1">Floor Area</p>
-                                            <p className="text-sm font-medium text-gray-800">1,240 sq ft</p>
+                                            <p className="text-sm font-medium text-gray-800">{customFacts?.sqft || "1,240 sq ft"}</p>
                                         </div>
-                                        <div className="bg-white/40 p-3 rounded-xl border border-gray-100">
+                                        <div className="bg-white/40 p-3 rounded-xl border border-white/50">
+                                            <p className="text-[10px] uppercase tracking-widest text-gray-400 mb-1">Layout</p>
+                                            <p className="text-sm font-medium text-gray-800">{customFacts?.beds && customFacts?.baths ? `${customFacts.beds}, ${customFacts.baths}` : "3 Bed, 2 Bath"}</p>
+                                        </div>
+                                        <div className="bg-white/40 p-3 rounded-xl border border-white/50">
                                             <p className="text-[10px] uppercase tracking-widest text-gray-400 mb-1">EPC Rating</p>
-                                            <p className="text-sm font-medium text-gray-800">B (84)</p>
+                                            <p className="text-sm font-medium text-gray-800">{customFacts?.epc || "B (84)"}</p>
                                         </div>
-                                        <div className="bg-white/40 p-3 rounded-xl border border-gray-100">
-                                            <p className="text-[10px] uppercase tracking-widest text-gray-400 mb-1">Council Tax</p>
-                                            <p className="text-sm font-medium text-gray-800">Band D</p>
-                                        </div>
-                                        <div className="bg-white/40 p-3 rounded-xl border border-gray-100">
+                                        <div className="bg-white/40 p-3 rounded-xl border border-white/50">
                                             <p className="text-[10px] uppercase tracking-widest text-gray-400 mb-1">Tenure</p>
                                             <p className="text-sm font-medium text-gray-800">Freehold</p>
                                         </div>
@@ -571,7 +638,11 @@ export function PropertyProfileModal({
                                             onClick={() => img.url && setLightboxImage({ src: img.url, alt: img.album_key || "Photo" })}
                                         >
                                             <div className="aspect-square w-full">
-                                                <img
+                                                <motion.img
+                                                    initial={{ opacity: 0 }}
+                                                    whileInView={{ opacity: 1 }}
+                                                    viewport={{ once: true }}
+                                                    transition={{ duration: 0.3 }}
                                                     src={img.url || '/placeholder-home.jpg'}
                                                     alt={img.album_key || "Gallery"}
                                                     loading="lazy"
@@ -614,6 +685,7 @@ export function PropertyProfileModal({
                                         onStatusUpdate={onStatusUpdate}
                                         onStoryUpdate={onStoryUpdate}
                                         onCoverUpload={onCoverUpload}
+                                        onUnclaim={onUnclaim}
                                     />
                                 )}
 
@@ -695,7 +767,7 @@ export function PropertyProfileModal({
                             )}
                         </div>
                     </div>
-                </div>
+                </motion.div>
             </div>
 
             {/* Lightbox */}

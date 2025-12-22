@@ -1,15 +1,17 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { AnimatePresence } from "framer-motion";
 import { useClaim } from "@/hooks/useClaim";
 import type { PropertyPublic } from "@/types/property";
 import { inspectLog, resolveStatus } from "@/lib/inspect";
 import { PropertyCardPreview, PropertyCardClickOutside } from "./PropertyCardPreview";
 import { PropertyProfileModal } from "./PropertyProfileModal";
 import { supabase } from "@/lib/supabase/client";
-import { isPropertyMine } from "@/lib/ownership";
+import { isPropertyMine, unclaimProperty } from "@/lib/ownership";
 import { useMapIntent } from "@/contexts/MapIntentContext";
 import { persistOwnerStatus, type OwnerStatus } from "@/lib/intent";
+import type { MapRef } from "react-map-gl/maplibre";
 
 // =============================================================================
 // PROPERTY CARD SHEET
@@ -33,6 +35,8 @@ interface PropertyCardSheetProps {
     initialOpenMode?: "card" | "messages";
     /** Initial conversation ID to open directly (used with initialOpenMode="messages") */
     initialConversationId?: string | null;
+    /** Reference to the Map instance for spatial anchoring */
+    mapRef?: React.RefObject<MapRef | null>;
 }
 
 /**
@@ -48,6 +52,7 @@ export function PropertyCardSheet({
     isMobile = false,
     initialOpenMode = "card",
     initialConversationId = null,
+    mapRef,
 }: PropertyCardSheetProps) {
     const { claim, claiming, error: claimError, isAuthenticated } = useClaim();
     const { refreshIntentOverlay } = useMapIntent();
@@ -123,6 +128,33 @@ export function PropertyCardSheet({
             return () => clearTimeout(timer);
         }
     }, [justClaimed]);
+
+    // Spatial Anchoring Logic
+    const [screenCoords, setScreenCoords] = useState<{ x: number, y: number } | null>(null);
+
+    useEffect(() => {
+        if (!mapRef?.current || !property?.lat || !property?.lon || isMobile) return;
+
+        const map = mapRef.current.getMap();
+
+        const updatePosition = () => {
+            const point = map.project([property.lon, property.lat]);
+            setScreenCoords({ x: point.x, y: point.y });
+        };
+
+        // Initial position
+        updatePosition();
+
+        map.on('move', updatePosition);
+        map.on('zoom', updatePosition);
+        map.on('resize', updatePosition);
+
+        return () => {
+            map.off('move', updatePosition);
+            map.off('zoom', updatePosition);
+            map.off('resize', updatePosition);
+        };
+    }, [mapRef, property, isMobile]);
 
     // Handle View home click - opens Tier 2 modal
     const handleViewHome = useCallback(() => {
@@ -258,54 +290,56 @@ export function PropertyCardSheet({
         setShowModal(false);
     }, []);
 
-    // Loading state
+    // Handle unclaim (owner)
+    const handleUnclaim = useCallback(async () => {
+        if (!property) return;
+
+        inspectLog("OWNER_UNCLAIM", {
+            property_id: property.property_id,
+            display_label: property.display_label,
+        });
+
+        const result = await unclaimProperty(supabase, property.property_id);
+
+        if (result.success) {
+            console.log(`[Owner] ${property.display_label || 'Property'} is now unclaimed.`);
+
+            // Refresh map pins to show the unclaimed state
+            refreshIntentOverlay(property.property_id);
+            onRefreshPins?.();
+
+            // Close the modal and card
+            onClose();
+        } else {
+            console.error("[Owner] Failed to unclaim:", result.error);
+            throw new Error(result.error || "Failed to unclaim property");
+        }
+    }, [property, refreshIntentOverlay, onRefreshPins, onClose]);
+
+    // Loading state - return null to avoid old sidebar appearing
     if (loading) {
-        return (
-            <div className="absolute top-20 right-4 w-[380px] bg-white dark:bg-gray-900 rounded-xl shadow-xl overflow-hidden z-40 animate-pulse">
-                <div className="w-full h-48 bg-gray-200 dark:bg-gray-700" />
-                <div className="p-4">
-                    <div className="h-5 bg-gray-200 dark:bg-gray-700 rounded w-3/4 mb-3" />
-                    <div className="h-4 bg-gray-100 dark:bg-gray-800 rounded w-full mb-2" />
-                    <div className="h-4 bg-gray-100 dark:bg-gray-800 rounded w-5/6 mb-4" />
-                    <div className="h-10 bg-gray-200 dark:bg-gray-700 rounded" />
-                </div>
-            </div>
-        );
+        return null;
     }
 
-    // Error state
+    // Error state - show a minimal floating error
     if (error || !property) {
-        return (
-            <div className="absolute top-20 right-4 w-[380px] bg-white dark:bg-gray-900 rounded-xl shadow-xl p-4 z-40">
-                <div className="flex items-start justify-between mb-3">
-                    <p className="text-sm text-red-600 dark:text-red-400">
-                        {error || "Property not found"}
-                    </p>
-                    <button
-                        onClick={onClose}
-                        className="p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
-                        aria-label="Close"
-                    >
-                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                        </svg>
-                    </button>
-                </div>
-            </div>
-        );
+        return null;
     }
 
     return (
-        <>
+        <AnimatePresence>
             {/* Tier 1 - Preview Card */}
-            <PropertyCardClickOutside onClickOutside={onClose}>
-                <PropertyCardPreview
-                    property={property}
-                    onClose={onClose}
-                    onViewHome={handleViewHome}
-                    isMobile={isMobile}
-                />
-            </PropertyCardClickOutside>
+            {!showModal && (
+                <PropertyCardClickOutside onClickOutside={onClose}>
+                    <PropertyCardPreview
+                        property={property}
+                        onClose={onClose}
+                        onViewHome={handleViewHome}
+                        isMobile={isMobile}
+                        screenCoords={screenCoords}
+                    />
+                </PropertyCardClickOutside>
+            )}
 
             {/* Tier 2 - Profile Modal */}
             {showModal && (
@@ -322,9 +356,10 @@ export function PropertyCardSheet({
                     initialOpenMode={initialOpenMode}
                     initialConversationId={initialConversationId}
                     onSelectNeighbour={onSelectNeighbour}
+                    onUnclaim={handleUnclaim}
                 />
             )}
-        </>
+        </AnimatePresence>
     );
 }
 
