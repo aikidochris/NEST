@@ -2,15 +2,15 @@
 
 import { useState, useCallback, useRef, useEffect, useImperativeHandle, forwardRef } from "react";
 import Map, { Source, Layer, ViewStateChangeEvent, MapRef } from "react-map-gl/maplibre";
-import type { MapLayerMouseEvent, GeoJSONSource } from "maplibre-gl";
+import type { MapLayerMouseEvent } from "maplibre-gl";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import type { BBox } from "@/types/property";
 import { AuthControls } from "@/components/AuthControls";
-import { PropertyCardSheet } from "@/components/PropertyCardSheet";
-import { AreaVibeBar, VibeStats, LiveFeedEvent } from "./AreaVibeBar";
+import { PropertyCardSheet } from "./PropertyCardSheet";
 import { GlassHUD } from "./GlassHUD";
-import { GlobalInboxOverlay } from "@/components/GlobalInboxOverlay";
+import { VIBE_ZONES, type VibeZone } from "@/lib/vibeZones";
+import { GlobalInboxOverlay } from "./GlobalInboxOverlay";
 import { AnchorSnippet, featureToAnchorData, type AnchorFeatureProperties } from "@/components/AnchorSnippet";
 import { useAuth } from "@/app/AuthProvider";
 import { inspectLog, resolveStatus } from "@/lib/inspect";
@@ -81,8 +81,6 @@ function bboxToGridKey(bbox: BBox): string {
     ].join(",");
 }
 
-// Intent flags are now delivered via MVT tiles (is_open_to_talking, is_for_sale, is_for_rent, is_settled)
-
 /**
  * Clean Lens: Hide commercial POIs (Retail, Petrol, Coffee).
  */
@@ -108,38 +106,30 @@ function hideCommercialPOIs(map: maplibregl.Map) {
     });
 }
 
+// Helper to calculate Haversine distance
+function getDistanceFromLatLonInKm(lat1: number, lon1: number, lat2: number, lon2: number) {
+    const R = 6371; // Radius of the earth in km
+    const dLat = deg2rad(lat2 - lat1);
+    const dLon = deg2rad(lon2 - lon1);
+    const a =
+        Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+        Math.cos(deg2rad(lat1)) * Math.cos(deg2rad(lat2)) *
+        Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    const d = R * c; // Distance in km
+    return d;
+}
+
+function deg2rad(deg: number) {
+    return deg * (Math.PI / 180);
+}
+
 // =============================================================================
-// LAYER QUERY HELPERS
+// PROPERTY MAP COMPONENT
 // =============================================================================
 
 /** Layer IDs that contain individual property points (non-cluster) */
 const QUERYABLE_POINT_LAYERS = ["property-points"];
-
-/**
- * Safely query rendered features from multiple layers.
- * Filters to layers that exist and returns empty array on any error.
- */
-function safeQueryRenderedFeatures(
-    map: maplibregl.Map,
-    layerIds: string[]
-): maplibregl.MapGeoJSONFeature[] {
-    // Filter to only layers that exist
-    const existing = layerIds.filter((id) => {
-        try {
-            return !!map.getLayer(id);
-        } catch {
-            return false;
-        }
-    });
-
-    if (existing.length === 0) return [];
-
-    try {
-        return map.queryRenderedFeatures(undefined, { layers: existing });
-    } catch {
-        return [];
-    }
-}
 
 export interface PropertyMapRef {
     refreshMapPins: () => Promise<void>;
@@ -150,13 +140,10 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
     const mapRef = useRef<MapRef>(null);
     const [viewState, setViewState] = useState(DEFAULT_VIEW);
     const [selectedPropertyId, setSelectedPropertyId] = useState<string | null>(null);
-    const [clusterData, setClusterData] = useState<GeoJSON.FeatureCollection>(EMPTY_GEOJSON);
-    const [propertyGeoJSON, setPropertyGeoJSON] = useState<GeoJSON.FeatureCollection>(EMPTY_GEOJSON);
-    const [vibeStats, setVibeStats] = useState<VibeStats | null>(null);
+    const [vibeStats, setVibeStats] = useState<any | null>(null);
     const [vibeLoading, setVibeLoading] = useState(false);
-    const [liveFeedEvents, setLiveFeedEvents] = useState<LiveFeedEvent[]>([]);
+    const [liveFeedEvents, setLiveFeedEvents] = useState<any[]>([]);
     const [liveFeedLoading, setLiveFeedLoading] = useState(false);
-    const [vibeBarExpanded, setVibeBarExpanded] = useState(false);
     const [showMessageCentre, setShowMessageCentre] = useState(false);
     const [activeStatusFilters, setActiveStatusFilters] = useState<string[]>(['for_sale', 'for_rent', 'open_to_talking', 'settled', 'unclaimed']);
     const [isFilterMounted, setIsFilterMounted] = useState(false);
@@ -164,8 +151,9 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
     const [pendingOpenMode, setPendingOpenMode] = useState<"card" | "messages">("card");
     const [pendingConversationId, setPendingConversationId] = useState<string | null>(null);
     const [viewMode, setViewMode] = useState<"paper" | "satellite">("paper");
-    const [is3D, setIs3D] = useState(false);  // 2D/3D performance toggle - Default OFF for reliable first-click sync
-    const [isPitchActive, setIsPitchActive] = useState(false); // Visual feedback state
+    const [is3D, setIs3D] = useState(false);
+    const [isPitchActive, setIsPitchActive] = useState(false);
+    const [isTrayExpanded, setIsTrayExpanded] = useState(false);
 
     const { accessToken, user } = useAuth();
     const clusterAbortRef = useRef<AbortController | null>(null);
@@ -175,10 +163,9 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
 
     // Manual pitch override: tracks if user has manually tilted the map
     const manualPitchOverrideRef = useRef(false);
-    const hasAutoPitchedRef = useRef(false);
 
     // Cache for vibe stats by grid key
-    const vibeCacheRef = useRef<globalThis.Map<string, VibeStats>>(new globalThis.Map());
+    const vibeCacheRef = useRef<globalThis.Map<string, any>>(new globalThis.Map());
 
     // Store current bbox for live feed fetch
     const currentBboxRef = useRef<BBox | null>(null);
@@ -186,13 +173,16 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
     // Pulse animation radius for Living Pins
     const [pulseRadius, setPulseRadius] = useState(0);
 
+    // VIBE SENTINEL: Track the active neighborhood zone
+    const [currentVibeZone, setCurrentVibeZone] = useState<VibeZone | null>(null);
+
     // Neighborhood Anchors state
     const [anchorData, setAnchorData] = useState<GeoJSON.FeatureCollection>(EMPTY_GEOJSON);
     const [activeAnchorId, setActiveAnchorId] = useState<string | null>(null);
-    const [lockedAnchorIds, setLockedAnchorIds] = useState<string[]>([]);  // Array for toggle logic
+    const [lockedAnchorIds, setLockedAnchorIds] = useState<string[]>([]);
     const [selectedAnchor, setSelectedAnchor] = useState<GeoJSON.Feature<GeoJSON.Point, AnchorFeatureProperties> | null>(null);
 
-    // Tiered Anchor Filter: Foundational, Practical, Spirit
+    // Tiered Anchor Filter
     const [anchorTierFilter, setAnchorTierFilter] = useState<'all' | 'foundational' | 'practical' | 'spirit'>('all');
 
     // Entrance animation for filter bar
@@ -207,19 +197,16 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
         if (!map) return;
 
         const applyFilters = () => {
-            // 1. BASE FILTER: Handle explicit 'Clear' state (Empty Map)
             const baseFilter = activeStatusFilters.length === 0
                 ? ['==', ['get', 'property_id'], 'NONE']
                 : ['in', ['get', 'status'], ['literal', activeStatusFilters]];
 
-            // 2. STANDARD LAYERS: All Pins, Glyphs, Interaction Points
             ['hearth-pins', 'hearth-glyphs', 'property-points'].forEach(layerId => {
                 if (map.getLayer(layerId)) {
                     map.setFilter(layerId, baseFilter as any);
                 }
             });
 
-            // 3. INTENT LAYERS: Glow & Pulse (Must ONLY show for active intent)
             const intentFilter = ['all', baseFilter, ['==', ['get', 'has_active_intent'], true]];
             ['building-glow', 'hearth-pulse'].forEach(layerId => {
                 if (map.getLayer(layerId)) {
@@ -228,7 +215,6 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
             });
         };
 
-        // Apply immediately or wait for load if needed
         if (map.isStyleLoaded()) {
             applyFilters();
         } else {
@@ -247,35 +233,23 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
     const clearStatusFilters = () => setActiveStatusFilters([]);
     const selectAllFilters = () => setActiveStatusFilters(['for_sale', 'for_rent', 'open_to_talking', 'settled', 'unclaimed']);
 
-    // Expose Bridge to parents (e.g. HomeClient / Header)
     useImperativeHandle(ref, () => ({
         refreshMapPins: async () => {
-            // MVT tiles update automatically via cache control; trigger repaint to be sure
             mapRef.current?.getMap().triggerRepaint();
         },
         openMessageCentre: () => setShowMessageCentre(true)
     }));
 
-    // Data fetching removed - relying purely on Vector Tiles (MVT) for the Luminous Engine
-    // This dramatically simplifies state management and relies on the browser's tile cache.
-
-
-
     // Fetch vibe stats for area
     const fetchVibeStats = useCallback(async (bbox: BBox) => {
         const gridKey = bboxToGridKey(bbox);
-
-        // Check cache first
         const cached = vibeCacheRef.current.get(gridKey);
         if (cached) {
             setVibeStats(cached);
             return;
         }
 
-        if (vibeAbortRef.current) {
-            vibeAbortRef.current.abort();
-        }
-
+        if (vibeAbortRef.current) vibeAbortRef.current.abort();
         const controller = new AbortController();
         vibeAbortRef.current = controller;
         setVibeLoading(true);
@@ -294,7 +268,6 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
             const json = await response.json();
             if (json.ok && json.data) {
                 vibeCacheRef.current.set(gridKey, json.data);
-                // Keep cache size reasonable
                 if (vibeCacheRef.current.size > 50) {
                     const firstKey = vibeCacheRef.current.keys().next().value;
                     if (firstKey) vibeCacheRef.current.delete(firstKey);
@@ -317,7 +290,6 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
                 setAnchorData(EMPTY_GEOJSON);
                 return;
             }
-
             const json = await response.json();
             if (json.ok && json.geojson) {
                 setAnchorData(json.geojson);
@@ -327,23 +299,15 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
         }
     }, []);
 
-    // Load anchors on mount
     useEffect(() => {
         fetchAnchorData();
     }, [fetchAnchorData]);
 
-    // Handle anchor click - toggle lock/unlock for Morning Orbit radii
     const handleAnchorClick = useCallback((anchorId: string) => {
         const feature = anchorData.features.find(f => f.properties?.id === anchorId) as GeoJSON.Feature<GeoJSON.Point, AnchorFeatureProperties> | undefined;
-
-        // Toggle lock: click to pin, click again to remove
         setLockedAnchorIds(prev =>
-            prev.includes(anchorId)
-                ? prev.filter(id => id !== anchorId)
-                : [...prev, anchorId]
+            prev.includes(anchorId) ? prev.filter(id => id !== anchorId) : [...prev, anchorId]
         );
-
-        // Update selected anchor for snippet display
         if (feature && !lockedAnchorIds.includes(anchorId)) {
             setSelectedAnchor(feature);
         } else {
@@ -351,75 +315,49 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
         }
     }, [anchorData.features, lockedAnchorIds]);
 
-    // Debounced fetch on map move
     const handleMoveEnd = useCallback(
         (evt: ViewStateChangeEvent) => {
             const bounds = evt.target.getBounds();
             if (!bounds) return;
 
             const bbox = computeBBox(bounds);
-            const zoom = evt.viewState.zoom;
-
-            if (debounceTimerRef.current) {
-                clearTimeout(debounceTimerRef.current);
-            }
+            if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
 
             debounceTimerRef.current = setTimeout(() => {
                 fetchVibeStats(bbox);
                 currentBboxRef.current = bbox;
-                // Fetch live feed if panel is expanded
-                if (vibeBarExpanded) {
-                    fetchLiveFeed(bbox);
-                }
+                if (isTrayExpanded) fetchLiveFeed(bbox);
             }, DEBOUNCE_MS);
         },
-        [fetchVibeStats, vibeBarExpanded]
+        [fetchVibeStats, isTrayExpanded]
     );
 
-    // Smart Auto-Pitch: Detect manual user input (right-click tilt)
     useEffect(() => {
         const map = mapRef.current?.getMap();
         if (!map) return;
-
-        const handlePitchStart = () => {
-            manualPitchOverrideRef.current = true;
-        };
-
+        const handlePitchStart = () => { manualPitchOverrideRef.current = true; };
         map.on("pitchstart", handlePitchStart);
-
-        return () => {
-            map.off("pitchstart", handlePitchStart);
-        };
+        return () => { map.off("pitchstart", handlePitchStart); };
     }, []);
 
-    // Map Event Listeners: Pitch Sync
     useEffect(() => {
         const map = mapRef.current?.getMap();
         if (!map) return;
-
         const updatePitchState = () => {
             const pitch = map.getPitch();
-            setIsPitchActive(pitch > 5); // Threshold for visual "active" state
+            setIsPitchActive(pitch > 5);
         };
-
         map.on("pitch", updatePitchState);
-        map.on("move", updatePitchState); // Catch all movement
-
-        // Initial check
+        map.on("move", updatePitchState);
         updatePitchState();
-
         return () => {
             map.off("pitch", updatePitchState);
             map.off("move", updatePitchState);
         };
     }, []);
 
-    // Fetch live feed events
     const fetchLiveFeed = useCallback(async (bbox: BBox) => {
-        if (liveFeedAbortRef.current) {
-            liveFeedAbortRef.current.abort();
-        }
-
+        if (liveFeedAbortRef.current) liveFeedAbortRef.current.abort();
         const controller = new AbortController();
         liveFeedAbortRef.current = controller;
         setLiveFeedLoading(true);
@@ -429,16 +367,12 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
             const response = await fetch(`/api/live-feed?bbox=${bboxParam}&limit=30`, {
                 signal: controller.signal,
             });
-
             if (!response.ok) {
                 setLiveFeedEvents([]);
                 return;
             }
-
             const json = await response.json();
-            if (json.ok && json.events) {
-                setLiveFeedEvents(json.events);
-            }
+            if (json.ok && json.events) setLiveFeedEvents(json.events);
         } catch (err) {
             if (err instanceof Error && err.name === "AbortError") return;
             setLiveFeedEvents([]);
@@ -447,21 +381,16 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
         }
     }, []);
 
-    // Initial fetch on map load + set up cursor handlers + cinematic atmosphere
     const handleLoad = useCallback(
         (evt: { target: maplibregl.Map }) => {
             const map = evt.target;
             const bounds = map.getBounds();
-
             if (bounds) {
                 const bbox = computeBBox(bounds);
                 fetchVibeStats(bbox);
             }
 
-            // Cinematic Orientation: Atmospheric Fog
-            // Soft horizon fade into Paper background
             try {
-                // TypeScript types incomplete for fog API (MapLibre 3.x+ feature)
                 (map as unknown as { setFog: (options: object) => void }).setFog({
                     color: PAPER,
                     range: [1, 12],
@@ -471,38 +400,23 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
                 console.debug("Fog not supported:", e);
             }
 
-            // Image Bank: Custom Hearth Anchor Icons
-            // Load minimalist SVG icons into map sprite for anchor visualization
             const hearthIcons: Record<string, string> = {
                 "hearth-school": `data:image/svg+xml;base64,${btoa(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="24" height="24"><path d="M12 3L1 9l4 2.18v6L12 21l7-3.82v-6l2-1.09V17h2V9L12 3zm6.82 6L12 12.72 5.18 9 12 5.28 18.82 9zM17 15.99l-5 2.73-5-2.73v-3.72L12 15l5-2.73v3.72z"/></svg>`)}`,
                 "hearth-rail": `data:image/svg+xml;base64,${btoa(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="24" height="24"><path d="M12 2c-4 0-8 .5-8 4v9.5C4 17.43 5.57 19 7.5 19L6 20.5v.5h2.23l2-2H14l2 2h2v-.5L16.5 19c1.93 0 3.5-1.57 3.5-3.5V6c0-3.5-3.58-4-8-4zM7.5 17c-.83 0-1.5-.67-1.5-1.5S6.67 14 7.5 14s1.5.67 1.5 1.5S8.33 17 7.5 17zm3.5-7H6V6h5v4zm2 0V6h5v4h-5zm3.5 7c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5z"/></svg>`)}`,
                 "hearth-park": `data:image/svg+xml;base64,${btoa(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="24" height="24"><path d="M17 12h2L12 2 5 12h2l-3 8h7v2h2v-2h7l-3-8zm-5-6.5l4.3 5.5H13v3h-2v-3H7.7L12 5.5z"/></svg>`)}`,
-                "hearth-coastal": `data:image/svg+xml;base64,${btoa(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="24" height="24"><path d="M21 17c-1.1 0-2-.9-2-2 0 1.1-.9 2-2 2s-2-.9-2-2c0 1.1-.9 2-2 2s-2-.9-2-2c0 1.1-.9 2-2 2s-2-.9-2-2c0 1.1-.9 2-2 2v2c1.1 0 2-.9 2-2 0 1.1.9 2 2 2s2-.9 2-2c0 1.1.9 2 2 2s2-.9 2-2c0 1.1.9 2 2 2s2-.9 2-2c0 1.1.9 2 2 2v-2zm0-4c-1.1 0-2-.9-2-2 0 1.1-.9 2-2 2s-2-.9-2-2c0 1.1-.9 2-2 2s-2-.9-2-2c0 1.1-.9 2-2 2s-2-.9-2-2c0 1.1-.9 2-2 2v2c1.1 0 2-.9 2-2 0 1.1.9 2 2 2s2-.9 2-2c0 1.1.9 2 2 2s2-.9 2-2c0 1.1.9 2 2 2s2-.9 2-2c0 1.1.9 2 2 2v-2z"/></svg>`)}`,
+                "hearth-coastal": `data:image/svg+xml;base64,${btoa(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="24" height="24"><path d="M21 17c-1.1 0-2-.9-2-2 0 1.1-.9 2-2 2s-2-.9-2-2c0 1.1-.9 2-2 2s-2-.9-2-2c0 1.1-.9 2-2 2s-2-.9-2-2c0 1.1-.9 2-2 2v2c1.1 0 2-.9 2-2 0 1.1.9 2 2 2s2-.9 2-2c0 1.1.9 2 2 2s2-.9 2-2c0 1.1.9 2 2 2v-2zm0-4c-1.1 0-2-.9-2-2 0 1.1-.9 2-2 2s-2-.9-2-2c0 1.1-.9 2-2 2s-2-.9-2-2c0 1.1-.9 2-2 2s-2-.9-2-2c0 1.1-.9 2-2 2v2c1.1 0 2-.9 2-2 0 1.1.9 2 2 2s2-.9 2-2c0 1.1.9 2 2 2s2-.9 2-2c0 1.1.9 2 2 2s2-.9 2-2c0 1.1.9 2 2 2v-2z"/></svg>`)}`,
                 "hearth-village": `data:image/svg+xml;base64,${btoa(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="24" height="24"><path d="M15 11V5l-3-3-3 3v2H3v14h18V11h-6zm-8 8H5v-2h2v2zm0-4H5v-2h2v2zm0-4H5V9h2v2zm6 8h-2v-2h2v2zm0-4h-2v-2h2v2zm0-4h-2V9h2v2zm0-4h-2V5h2v2zm6 12h-2v-2h2v2zm0-4h-2v-2h2v2z"/></svg>`)}`,
                 "hearth-health": `data:image/svg+xml;base64,${btoa(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="24" height="24"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-2 10h-4v4h-2v-4H7v-2h4V7h2v4h4v2z"/></svg>`)}`,
                 "hearth-shop": `data:image/svg+xml;base64,${btoa(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="24" height="24"><path d="M18 6h-2c0-2.21-1.79-4-4-4S8 3.79 8 6H6c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm-6-2c1.1 0 2 .9 2 2h-4c0-1.1.9-2 2-2zm6 16H6V8h2v2c0 .55.45 1 1 1s1-.45 1-1V8h4v2c0 .55.45 1 1 1s1-.45 1-1V8h2v12z"/></svg>`)}`
             };
 
-            // Use Image() constructor for reliable data URI loading (fixes InvalidStateError)
             Object.entries(hearthIcons).forEach(([id, dataUri]) => {
                 const img = new Image(24, 24);
-                img.onload = () => {
-                    if (!map.hasImage(id)) {
-                        try {
-                            map.addImage(id, img, { sdf: true });
-                        } catch (e) {
-                            console.warn(`Failed to add image: ${id}`, e);
-                        }
-                    }
-                };
-                img.onerror = (e) => console.warn(`Failed to load icon: ${id}`, e);
+                img.onload = () => { if (!map.hasImage(id)) map.addImage(id, img, { sdf: true }); };
                 img.src = dataUri;
             });
 
-            // Cinematic Orientation: Hearth Sky
-            // Warm-neutral horizon for 3D tilt views using MapLibre's setSky API
             try {
-                // TypeScript types incomplete for sky API (MapLibre experimental feature)
                 (map as unknown as { setSky: (options: object) => void }).setSky({
                     "sky-color": PAPER,
                     "sky-horizon-blend": 0.5,
@@ -511,1240 +425,372 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
                     "fog-color": PAPER,
                     "fog-ground-blend": 0.5
                 });
-            } catch (e) {
-                console.debug("Sky not supported:", e);
-            }
+            } catch (e) { console.debug("Sky not supported:", e); }
 
-            // Pointer cursor on interactive layers
-            const interactiveLayers = ["property-points", "hearth-pins"];
-            interactiveLayers.forEach((layer) => {
-                map.on("mouseenter", layer, () => {
-                    map.getCanvas().style.cursor = "pointer";
-                });
-                map.on("mouseleave", layer, () => {
-                    map.getCanvas().style.cursor = "";
-                });
+            ["property-points", "hearth-pins"].forEach((layer) => {
+                map.on("mouseenter", layer, () => { map.getCanvas().style.cursor = "pointer"; });
+                map.on("mouseleave", layer, () => { map.getCanvas().style.cursor = ""; });
             });
 
-            // Clean Lens logic: Hide commercial POIs
             hideCommercialPOIs(map);
-
-            // Log layer availability once on first idle
-            let hasLoggedLayers = false;
-            const logLayersOnce = () => {
-                if (hasLoggedLayers) return;
-                hasLoggedLayers = true;
-
-                const layersToCheck = [...QUERYABLE_POINT_LAYERS, "hearth-pins", "hearth-glyphs"];
-                const layerStatus = layersToCheck.map(id => {
-                    try {
-                        return { id, exists: !!map.getLayer(id) };
-                    } catch {
-                        return { id, exists: false };
-                    }
-                });
-                inspectLog("MAP_LAYERS_CHECK", { queried_layers: layerStatus });
-            };
-
-            // Log layers on first idle
-            map.on("idle", () => {
-                logLayersOnce();
-            });
         },
         [fetchVibeStats]
     );
 
-    // Ensure pin layers persist and stay on top (simplified - only handles vector source)
-    const ensurePinLayers = useCallback(() => {
-        const map = mapRef.current?.getMap();
-        if (!map || !map.isStyleLoaded()) return;
+    // =============================================================================
+    // STYLE ENFORCEMENT & 3D LOGIC
+    // =============================================================================
 
-        // Hide commercial POIs
-        hideCommercialPOIs(map);
+    // Ref to track current 3D state for use in style.load callbacks (avoids stale closures)
+    const is3DRef = useRef(is3D);
+    useEffect(() => { is3DRef.current = is3D; }, [is3D]);
 
-        // Explicit layer ordering: Satellite must be at the very bottom (Index 0)
+    // Mode-aware 3D building layer
+    const add3DBuildings = useCallback((map: maplibregl.Map, forceIs3D?: boolean) => {
+        const shouldAdd = forceIs3D ?? is3DRef.current;
+        if (!shouldAdd || map.getLayer("building-3d") || !map.isStyleLoaded()) return;
+
+        const layers = map.getStyle()?.layers || [];
+        const existingBuilding = layers.find(l => l.id.includes("building") && l.type === "fill");
+        if (existingBuilding && 'source' in existingBuilding) {
+            try {
+                // Get current viewMode from the React state
+                const currentViewMode = viewMode;
+                const isGhost = currentViewMode === "satellite";
+                console.log(`[3D] Adding buildings in ${isGhost ? 'GHOST' : 'WARM'} mode`);
+                map.addLayer({
+                    id: "building-3d",
+                    source: existingBuilding.source as string,
+                    "source-layer": "source-layer" in existingBuilding ? (existingBuilding["source-layer"] as string) : "building",
+                    type: "fill-extrusion",
+                    minzoom: 14,
+                    paint: {
+                        "fill-extrusion-color": isGhost ? "#E0E0E0" : BUILDING_WARM,
+                        "fill-extrusion-height": 6.5,
+                        "fill-extrusion-base": 0,
+                        "fill-extrusion-opacity": isGhost ? 0.4 : 0.6
+                    }
+                });
+            } catch (e) { console.warn("Could not add 3D buildings:", e); }
+        }
+    }, [viewMode]);
+
+    const remove3DBuildings = useCallback((map: maplibregl.Map) => {
+        if (map.getLayer("building-3d")) {
+            try { map.removeLayer("building-3d"); } catch { }
+        }
+    }, []);
+
+    const cleanSatelliteLens = useCallback((map: maplibregl.Map) => {
+        if (viewMode !== "satellite" || !map.isStyleLoaded()) return;
+        const HEARTH_LAYERS = ["satellite-layer", "building-3d", "discovery-heatmap", "building-glow", "hearth-pins", "hearth-pulse", "hearth-glyphs", "property-points", "anchor-radii", "anchor-icons", "anchor-labels"];
+        const layers = map.getStyle().layers || [];
+        layers.forEach(l => {
+            if (HEARTH_LAYERS.includes(l.id)) return;
+            try { map.setLayoutProperty(l.id, "visibility", "none"); } catch { }
+        });
+    }, [viewMode]);
+
+    const stackLayers = useCallback((map: maplibregl.Map) => {
         if (map.getLayer("satellite-layer")) {
             try {
                 const layers = map.getStyle().layers || [];
                 const firstLayerId = layers[0]?.id;
-                if (firstLayerId && firstLayerId !== "satellite-layer") {
-                    map.moveLayer("satellite-layer", firstLayerId);
-                }
-            } catch { /* ignore */ }
+                if (firstLayerId && firstLayerId !== "satellite-layer") map.moveLayer("satellite-layer", firstLayerId);
+            } catch { }
         }
-
-        // 3D Buildings sit above satellite but below pins
-        if (map.getLayer("building-3d")) {
-            try {
-                map.moveLayer("building-3d");
-            } catch { /* ignore */ }
-        }
-
-        // Move ALL Hearth layers to very top (ensure JSX layers aren't buried)
-        // Order matters: bottom-to-top of this list
-        const TOP_LAYERS = [
-            "discovery-heatmap",
-            "building-glow",
-            "property-points", // Invisible hit target
-            "anchor-radii",
-            "anchor-labels",
-            "anchor-icons",
-            "hearth-pins",
-            "hearth-pulse",
-            "hearth-glyphs"
-        ];
-
-        TOP_LAYERS.forEach(id => {
-            if (map.getLayer(id)) {
-                try { map.moveLayer(id); } catch { /* ignore */ }
-            }
+        ["discovery-heatmap", "building-glow", "property-points", "anchor-radii", "anchor-labels", "anchor-icons", "hearth-pins", "hearth-pulse", "hearth-glyphs"].forEach(id => {
+            if (map.getLayer(id)) map.moveLayer(id);
         });
-
     }, []);
 
-    // Effect to handle mode switching, 3D toggle, and layer persistence
+    const ensurePinLayers = useCallback(() => {
+        const map = mapRef.current?.getMap();
+        if (!map || !map.isStyleLoaded()) return;
+        hideCommercialPOIs(map);
+        stackLayers(map);
+    }, [stackLayers]);
+
+    const handleStyleUpdate = useCallback(() => {
+        const map = mapRef.current?.getMap();
+        if (!map || !map.isStyleLoaded()) return;
+
+        hideCommercialPOIs(map);
+        if (is3DRef.current) {
+            remove3DBuildings(map);
+            add3DBuildings(map, is3DRef.current);
+        } else {
+            remove3DBuildings(map);
+        }
+        cleanSatelliteLens(map);
+        stackLayers(map);
+
+        // Restore interaction
+        map.getCanvas().style.pointerEvents = 'auto';
+    }, [add3DBuildings, remove3DBuildings, cleanSatelliteLens, stackLayers]);
+
+    // Effect to handle viewMode Swap & style.load logic
+    // CRITICAL: Uses is3DRef to access fresh 3D state in the callback
     useEffect(() => {
         const map = mapRef.current?.getMap();
         if (!map) return;
 
-        // Add 3D building extrusion layer (6.5m height, static opacity)
-        // Note: Building basemap data doesn't contain property_id, so we use consistent styling
-        // The Hearth pin layers provide the active status indication on top
-        const add3DBuildings = () => {
-            if (!is3D) return;  // Skip if 2D mode
-            if (map.getLayer("building-3d")) return;
-            if (!map.isStyleLoaded()) return;
+        // Force a style reset on viewMode change to fix 'Swap Stall'
+        console.log(`[PropertyMap] ViewMode changed to: ${viewMode}, resetting style...`);
+        map.setStyle(MAP_STYLE);
 
-            const layers = map.getStyle()?.layers || [];
-            const existingBuilding = layers.find(l =>
-                l.id.includes("building") && l.type === "fill"
-            );
-
-            if (existingBuilding && 'source' in existingBuilding) {
-                try {
-                    // Ghostly Skeleton Logic
-                    const isGhost = viewMode === "satellite";
-
-                    map.addLayer({
-                        id: "building-3d",
-                        source: existingBuilding.source as string,
-                        "source-layer": "source-layer" in existingBuilding ? (existingBuilding["source-layer"] as string) : "building",
-                        type: "fill-extrusion",
-                        minzoom: 14,
-                        paint: {
-                            // Cinematic 3D: varying styles based on Skin
-                            "fill-extrusion-color": isGhost ? "#E0E0E0" : BUILDING_WARM, // Neutral Light Grey if Ghost
-                            "fill-extrusion-height": 6.5,
-                            "fill-extrusion-base": 0,
-                            "fill-extrusion-opacity": isGhost ? 0.4 : 0.6 // Ghostly transparency vs Solid
-                        }
-                    });
-                } catch (e) {
-                    console.warn("Could not add 3D buildings:", e);
-                }
-            } else {
-                // RETRY LOGIC: Sometimes the style is "loaded" but the remote source layers 
-                // haven't fully populated the local style object. Retry once on idle.
-                map.once("idle", () => {
-                    if (is3D && !map.getLayer("building-3d")) {
-                        add3DBuildings();
-                    }
-                });
-            }
-        };
-
-        // Remove 3D buildings
-        const remove3DBuildings = () => {
-            if (map.getLayer("building-3d")) {
-                try { map.removeLayer("building-3d"); } catch { /* ignore */ }
-            }
-        };
-
-        // Clean Satellite Lens: Aggressively hide EVERYTHING that isn't a Hearth layer
-        // This ensures Satellite mode is pure imagery + pins + 3D skeleton (if active)
-        const cleanSatelliteLens = () => {
-            if (!map.isStyleLoaded()) return;
-
-            const performClean = () => {
-                const layers = map.getStyle().layers || [];
-                const HEARTH_LAYERS = [
-                    "satellite-layer",
-                    "building-3d",
-                    "discovery-heatmap",
-                    "building-glow",
-                    "hearth-pins",
-                    "hearth-pulse",
-                    "hearth-glyphs",
-                    "property-points",
-                    "anchor-radii",
-                    "anchor-icons",
-                    "anchor-labels"
-                ];
-
-                const isSatellite = viewMode === "satellite";
-                const targetVisibility = isSatellite ? "none" : "visible";
-
-                layers.forEach(l => {
-                    if (HEARTH_LAYERS.includes(l.id)) return;
-
-                    // FORCE UPDATE: No checks, just enforce visibility
-                    try {
-                        map.setLayoutProperty(l.id, "visibility", targetVisibility);
-                    } catch { /* ignore */ }
-                });
-            };
-
-            // Run immediately
-            performClean();
-        };
-
-        // Stack layers: Satellite (bottom) -> Buildings (if 3D) -> Pins (top)
-        const stackLayers = () => {
-            // 1. Satellite: Ensure it's above the background but below everything else
-            if (map.getLayer("satellite-layer")) {
-                try {
-                    const layers = map.getStyle().layers || [];
-                    const backgroundLayer = layers.find(l => l.type === 'background');
-
-                    if (backgroundLayer) {
-                        // Place strictly AFTER background
-                        const bgIndex = layers.findIndex(l => l.id === backgroundLayer.id);
-                        const nextLayer = layers[bgIndex + 1];
-                        if (nextLayer && nextLayer.id !== "satellite-layer") {
-                            map.moveLayer("satellite-layer", nextLayer.id);
-                        }
-                    } else {
-                        // No background layer found, index 0 is safe (transparent canvas)
-                        const firstLayerId = layers[0]?.id;
-                        if (firstLayerId && firstLayerId !== "satellite-layer") {
-                            map.moveLayer("satellite-layer", firstLayerId);
-                        }
-                    }
-                } catch (e) {
-                    /* ignore */
-                }
-            }
-
-            // 2. 3D buildings above satellite
-            if (map.getLayer("building-3d")) {
-                try {
-                    // Move building-3d above satellite-layer if it exists, otherwise just ensure it's below points
-                    const beforeId = map.getLayer("hearth-pins") ? "hearth-pins" :
-                        map.getLayer("property-points") ? "property-points" : undefined;
-
-                    if (beforeId) {
-                        map.moveLayer("building-3d", beforeId);
-                    } else {
-                        // If neither exists yet, just move it to top of stack so far
-                        map.moveLayer("building-3d");
-                    }
-                } catch (e) {
-                    /* ignore */
-                }
-            }
-
-            // 3. Hearth pin layers on very top (in order: pins, pulse, glyphs)
-            const TOP_LAYERS = [
-                "discovery-heatmap",
-                "building-glow",
-                "property-points",
-                "anchor-radii",
-                "anchor-labels",
-                "anchor-icons",
-                "hearth-pins",
-                "hearth-pulse",
-                "hearth-glyphs"
-            ];
-
-            TOP_LAYERS.forEach(id => {
-                if (map.getLayer(id)) {
-                    try {
-                        map.moveLayer(id);
-                    } catch (e) {
-                        /* ignore */
-                    }
-                }
-            });
-        };
-
-        // Style update handler - runs on style.load
-        const handleStyleUpdate = () => {
-            if (!map.isStyleLoaded()) return;
-
-            // Hide commercial POIs
+        const onStyleLoad = () => {
+            console.log(`[PropertyMap] Style loaded. is3D=${is3DRef.current}, viewMode=${viewMode}`);
+            // Apply all Hearth furniture
             hideCommercialPOIs(map);
+            cleanSatelliteLens(map);
+            stackLayers(map);
 
-            // Handle 3D mode - buildings available in ALL modes when is3D is true
-            if (is3D) {
-                remove3DBuildings();
-                add3DBuildings();
-            } else {
-                remove3DBuildings();
+            // Re-add 3D if it was active (using ref for fresh value)
+            if (is3DRef.current) {
+                console.log("[PropertyMap] Re-adding 3D buildings after style load...");
+                remove3DBuildings(map);
+                add3DBuildings(map, true);
             }
-
-            // Toggle roads/landuse for Clean Reality
-            cleanSatelliteLens();
-
-            // Stack layers correctly
-            stackLayers();
-
-            // Ensure pin layers exist
-            ensurePinLayers();
+            map.getCanvas().style.pointerEvents = 'auto';
         };
 
-        // Listen for style.load to re-add our custom layers after style changes
-        map.on("style.load", handleStyleUpdate);
+        map.once("style.load", onStyleLoad);
 
-        // POLLING ENFORCER: Brute-force stability for the first few seconds
-        // This covers any React rendering delays without risking infinite recursion events
-
-        // 1. Immediate Execution
-        if (map.isStyleLoaded()) {
-            cleanSatelliteLens();
-            // stackLayers(); // Keep simpler logic for immediate
-            ensurePinLayers();
-
-            // Re-apply 3D state
-            if (is3D) {
-                remove3DBuildings();
-                add3DBuildings();
-            } else {
-                remove3DBuildings();
-            }
-        }
-
-        // 2. The Polling Loop (Every 200ms for 2 seconds)
+        // Fallback polling for the transition period (does NOT touch 3D)
         const pollingInterval = setInterval(() => {
             if (!map.isStyleLoaded()) return;
-
-            // Only spam logs if we are strictly debugging, otherwise keep clean
-            // console.log("Enforcing View State: Tick"); 
-
-            cleanSatelliteLens();
-
-            // Only enforce stacking if in satellite mode (critical for pins)
-            if (viewMode === 'satellite') {
-                stackLayers();
-                ensurePinLayers();
+            hideCommercialPOIs(map);
+            cleanSatelliteLens(map);
+            stackLayers(map);
+            // Also re-check 3D in polling in case style.load was missed
+            if (is3DRef.current && !map.getLayer("building-3d")) {
+                add3DBuildings(map, true);
             }
-        }, 200);
-
-        // Stop polling after 2 seconds (sufficient for React to settle)
-        const stopPollingTimer = setTimeout(() => {
-            clearInterval(pollingInterval);
-        }, 2000);
+        }, 500);
+        const stopPollingTimer = setTimeout(() => clearInterval(pollingInterval), 2000);
 
         return () => {
-            map.off("style.load", handleStyleUpdate);
             clearInterval(pollingInterval);
             clearTimeout(stopPollingTimer);
         };
-    }, [viewMode, is3D, ensurePinLayers]); // Re-run when viewMode changes to update visuals
+    }, [viewMode, cleanSatelliteLens, stackLayers, add3DBuildings, remove3DBuildings]);
 
-    // SATELLITE LENS ENFORCER: Dedicated effect to force-hide basemap layers on viewMode change
-    // This catches race conditions where the main useEffect runs before layers are fully loaded
+    // Handle 3D state changes independently - NO style reset, just layer manipulation
     useEffect(() => {
         const map = mapRef.current?.getMap();
-        if (!map) return;
+        if (!map || !map.isStyleLoaded()) return;
 
-        const enforceCleanLens = () => {
-            if (viewMode !== "satellite") return;
-            if (!map.isStyleLoaded()) return;
-
-            const layers = map.getStyle().layers || [];
-            const HEARTH_LAYERS = [
-                "satellite-layer", "building-3d", "discovery-heatmap",
-                "building-glow", "hearth-pins", "hearth-pulse",
-                "hearth-glyphs", "property-points", "anchor-radii",
-                "anchor-icons", "anchor-labels"
-            ];
-
-            layers.forEach(l => {
-                if (HEARTH_LAYERS.includes(l.id)) return;
-                try {
-                    map.setLayoutProperty(l.id, "visibility", "none");
-                } catch { /* ignore */ }
-            });
-        };
-
-        // Run immediately if style is loaded
-        if (map.isStyleLoaded()) {
-            enforceCleanLens();
+        console.log(`[3D Effect] is3D changed to: ${is3D}`);
+        if (is3D) {
+            // Remove and re-add to pick up correct viewMode styling
+            remove3DBuildings(map);
+            add3DBuildings(map, true);
+        } else {
+            remove3DBuildings(map);
         }
+    }, [is3D, viewMode, add3DBuildings, remove3DBuildings]);
 
-        // Run on idle to catch all race conditions
-        map.once("idle", enforceCleanLens);
+    const handleMapClick = useCallback(async (evt: MapLayerMouseEvent) => {
+        try {
+            const features = evt.features;
+            if (!features || features.length === 0) return;
+            if (features[0].source?.includes('cluster') || features[0].properties?.cluster) return;
 
-        // Run after a delay as final fallback
-        const timer = setTimeout(enforceCleanLens, 200);
-
-        return () => {
-            clearTimeout(timer);
-        };
-    }, [viewMode]);
-
-    // Handle map click - cluster zoom or property select
-    const handleMapClick = useCallback(
-        async (evt: MapLayerMouseEvent) => {
-            try {
-                const features = evt.features;
-                if (!features || features.length === 0) return;
-
-                // DEFINITIVE CLUSTER GUARD: Prevent MapLibre decoder from reading cluster metadata
-                const firstFeature = features[0];
-                if (firstFeature.source?.includes('cluster') || firstFeature.properties?.cluster) return;
-
-                // Check for anchor icon click first
-                const anchorFeature = features.find((f) => f.layer?.id === "anchor-icons");
-                if (anchorFeature) {
-                    const anchorId = anchorFeature.properties?.id;
-                    if (anchorId) {
-                        handleAnchorClick(anchorId);
-                        return;
-                    }
-                }
-
-                // Cluster click logic REMOVED - using Heatmap/Zoom transition
-                // Individual property click - use feature properties directly from tiles
-                const hearthFeature = features.find((f) => f.layer?.id === "hearth-pins");
-                const baseFeature = features.find((f) => f.layer?.id === "property-points");
-                // Clusters and unclustered points removed for Heatmap
-
-                const feature = hearthFeature || baseFeature;
-                if (!feature) return;
-
-                const propertyId = feature.properties?.property_id;
-                // Crash Prevention: Ignore features without valid status
-                if (!feature.properties?.status) return;
-                if (propertyId) {
-                    // Build intent flags from feature properties (tiles now include all flags)
-                    const props = feature.properties ?? {};
-                    const source_layer = feature.layer?.id;
-
-                    // Read directly from tile properties
-                    const is_claimed = typeof props.is_claimed === "boolean" ? props.is_claimed : null;
-                    const intent_flags = {
-                        soft_listing: props.is_open_to_talking ?? null,
-                        settled: props.is_settled ?? null,
-                        is_for_sale: props.is_for_sale ?? null,
-                        is_for_rent: props.is_for_rent ?? null,
-                    };
-
-                    // Inspection mode logging for property click
-                    inspectLog("PROPERTY_OPEN", {
-                        property_id: propertyId,
-                        is_claimed,
-                        display_label: props.display_label ?? null,
-                        source_layer,
-                        intent_flags,
-                        resolved_status: resolveStatus({
-                            is_claimed,
-                            intent_flags: {
-                                soft_listing: intent_flags.soft_listing === true,
-                                settled: intent_flags.settled === true,
-                                is_for_sale: intent_flags.is_for_sale === true,
-                                is_for_rent: intent_flags.is_for_rent === true,
-                            },
-                        }),
-                    });
-                    // Clear pending conversation state for direct map clicks
-                    setPendingOpenMode("card");
-                    setPendingConversationId(null);
-                    setSelectedPropertyId(propertyId);
-                }
-            } catch (e) {
-                // Crash Prevention: Silently ignore decoder errors from malformed features
-                console.debug('handleMapClick error:', e);
+            const anchorFeature = features.find((f) => f.layer?.id === "anchor-icons");
+            if (anchorFeature && anchorFeature.properties?.id) {
+                handleAnchorClick(anchorFeature.properties.id);
+                return;
             }
-        },
-        []
-    );
 
-    // Close property sheet - clear all pending state
+            const feature = features.find((f) => f.layer?.id === "hearth-pins" || f.layer?.id === "property-points");
+            if (!feature || !feature.properties?.status) return;
+
+            const propertyId = feature.properties.property_id;
+            if (propertyId) {
+                setPendingOpenMode("card");
+                setPendingConversationId(null);
+                setSelectedPropertyId(propertyId);
+            }
+        } catch (e) { console.debug('handleMapClick error:', e); }
+    }, [handleAnchorClick]);
+
     const handleCloseSheet = useCallback(() => {
         setSelectedPropertyId(null);
         setPendingOpenMode("card");
         setPendingConversationId(null);
     }, []);
 
-    // Refresh intent: tiles are now the source of truth, so we just need to force a repaint
-    const refreshIntentForProperty = useCallback((_propertyId?: string) => {
-        // With MVT tiles as single source of truth, intent updates come from tile refresh
-        // Force map repaint by triggering a state change
-        const map = mapRef.current?.getMap();
-        if (map) {
-            // Trigger repaint on the vector source
-            map.triggerRepaint();
-        }
+    useEffect(() => {
+        const checkVibeZone = () => {
+            const { latitude, longitude } = viewState;
+            let nearestZone: VibeZone | null = null;
+            let minDistance = Infinity;
+            VIBE_ZONES.forEach((zone) => {
+                const [zLat, zLon] = zone.centroid;
+                const dist = getDistanceFromLatLonInKm(latitude, longitude, zLat, zLon);
+                if (dist < minDistance) { minDistance = dist; nearestZone = zone; }
+            });
+            if (minDistance > 2.5) nearestZone = null;
+            // Hysteresis: Only update if changed
+            setCurrentVibeZone(prev => {
+                console.log(`[VibeSentinel] Center: ${latitude.toFixed(4)}, ${longitude.toFixed(4)} | Nearest: ${nearestZone?.name} | Dist: ${minDistance.toFixed(2)}km`);
+                if (prev?.id === nearestZone?.id) return prev;
+                return nearestZone;
+            });
+        };
+        checkVibeZone();
+    }, [viewState.latitude, viewState.longitude]);
+
+    const refreshIntentForProperty = useCallback(() => {
+        mapRef.current?.getMap().triggerRepaint();
     }, []);
 
-    // After claim success, refresh intent
     const handleClaimSuccess = useCallback(() => {
-        // Refresh intent for the selected property
-        if (selectedPropertyId) {
-            refreshIntentForProperty(selectedPropertyId);
-        }
+        if (selectedPropertyId) refreshIntentForProperty();
     }, [selectedPropertyId, refreshIntentForProperty]);
 
-    // Fly to a property's coordinates
     const handleFlyToProperty = useCallback((options: FlyToOptions) => {
         const map = mapRef.current?.getMap();
         if (!map) return;
-
-        const zoom = options.zoom ?? 17; // Default to street-level zoom
-
-        // Fly to the property
-        map.flyTo({
-            center: [options.lon, options.lat],
-            zoom,
-            essential: true,
-            duration: 1500,
-        });
-
-        // Inspection log
-        inspectLog("NEIGHBOUR_FLYTO", {
-            property_id: options.propertyId,
-            lat: options.lat,
-            lon: options.lon,
-        });
+        map.flyTo({ center: [options.lon, options.lat], zoom: options.zoom ?? 17, essential: true, duration: 1500 });
+        inspectLog("NEIGHBOUR_FLYTO", { property_id: options.propertyId, lat: options.lat, lon: options.lon });
     }, []);
 
-    /**
-     * Unified property navigation handler.
-     * Implements the openProperty API contract from MapIntentContext.
-     */
     const handleOpenProperty = useCallback((options: OpenPropertyOptions) => {
         const { propertyId, openMode = "card", conversationId = null, lat, lon, zoom } = options;
-
-        // Step 1: Fly to property if coordinates provided
-        if (lat !== undefined && lon !== undefined) {
-            handleFlyToProperty({ propertyId, lat, lon, zoom });
-        }
-
-        // Step 2: Set pending state for PropertyCardSheet
+        if (lat !== undefined && lon !== undefined) handleFlyToProperty({ propertyId, lat, lon, zoom });
         setPendingOpenMode(openMode);
         setPendingConversationId(conversationId ?? null);
-
-        // Step 3: Open the property card (which will use pending state)
         setSelectedPropertyId(propertyId);
     }, [handleFlyToProperty]);
 
-    // Cleanup on unmount
-    useEffect(() => {
-        return () => {
-            clusterAbortRef.current?.abort();
-            vibeAbortRef.current?.abort();
-            liveFeedAbortRef.current?.abort();
-            if (debounceTimerRef.current) {
-                clearTimeout(debounceTimerRef.current);
-            }
-        };
-    }, []);
-
-    // Living Pin Pulse Animation (4s cycle)
     useEffect(() => {
         const startTime = Date.now();
         let animationFrame: number;
-
         const animate = () => {
-            const now = Date.now();
-            const elapsed = (now - startTime) % 4000;
-            const t = elapsed / 4000; // 0 to 1
-
-            // Gaussian-ish pulse: 0 -> 1 -> 0
-            const pulse = Math.exp(-Math.pow(t - 0.5, 2) / 0.05);
+            const elapsed = (Date.now() - startTime) % 4000;
+            const pulse = Math.exp(-Math.pow((elapsed / 4000) - 0.5, 2) / 0.05);
             setPulseRadius(pulse);
-
             animationFrame = requestAnimationFrame(animate);
         };
-
         animate();
         return () => cancelAnimationFrame(animationFrame);
     }, []);
 
-    // Update fog color based on view mode
-    // 'Architectural' Fog: center crisp, edges fade into Paper haze
-    // Paper Mode: Color #F9F7F4, Range [0.2, 10] - warm haze
-    // Satellite Mode: Color #FFFFFF, Range [0.5, 15] - atmospheric depth
     useEffect(() => {
         const map = mapRef.current?.getMap();
         if (!map) return;
-
         try {
             const isSatellite = viewMode === "satellite";
-            const fogColor = isSatellite ? "#FFFFFF" : PAPER;
-            const fogRange: [number, number] = isSatellite ? [0.5, 15] : [0.2, 10];
-
-            (map as unknown as { setFog: (options: object) => void }).setFog({
-                color: fogColor,
-                range: fogRange,
-                "horizon-blend": 0.1
-            });
-        } catch {
-            // Fog not supported
-        }
+            (map as any).setFog({ color: isSatellite ? "#FFFFFF" : PAPER, range: isSatellite ? [0.5, 15] : [0.2, 10], "horizon-blend": 0.1 });
+        } catch { }
     }, [viewMode]);
 
-
-    // Toggle vibe bar expand and fetch live feed
-    const handleToggleVibeBar = useCallback(() => {
-        setVibeBarExpanded(prev => {
-            const willExpand = !prev;
-            if (willExpand && currentBboxRef.current) {
-                fetchLiveFeed(currentBboxRef.current);
-            }
-            return willExpand;
-        });
-    }, [fetchLiveFeed]);
-
-    // Handle live feed event click - fly to property
-    const handleEventClick = useCallback(async (event: LiveFeedEvent) => {
-        // Close panel first
-        setVibeBarExpanded(false);
-        // Clear pending conversation state for live feed clicks
-        setPendingOpenMode("card");
-        setPendingConversationId(null);
-        // Select property to open the sheet
-        setSelectedPropertyId(event.property_id);
-    }, []);
-
-
-
-
-
-    // Vibe bar visibility: hidden when any card/sheet is open
-    const showVibeBar = !selectedPropertyId;
-
-    // Close vibe bar when property sheet opens
-    useEffect(() => {
-        if (selectedPropertyId) {
-            setVibeBarExpanded(false);
-        }
-    }, [selectedPropertyId]);
+    useEffect(() => { if (selectedPropertyId) setIsTrayExpanded(false); }, [selectedPropertyId]);
 
     return (
         <MapIntentProvider onRefresh={refreshIntentForProperty} onFlyTo={handleFlyToProperty} onOpenProperty={handleOpenProperty}>
             <div className="relative w-full h-screen">
-                <Map
-                    ref={mapRef}
-                    {...viewState}
-                    onMove={(evt) => setViewState(evt.viewState)}
-                    onMoveEnd={handleMoveEnd}
-                    onLoad={handleLoad}
-                    onClick={handleMapClick}
-                    onMouseMove={(e) => {
-                        const map = mapRef.current?.getMap();
-                        if (!map) return;
-
-                        // Null-Safe MVT is now live - tiles are sanitized with COALESCE for all nullable fields
-                        const targetLayers = ['hearth-pins', 'property-points', 'anchor-icons'];
-                        const interactableLayers = targetLayers.filter(id => map.getLayer(id));
-
-                        if (interactableLayers.length === 0) return;
-
-                        try {
-                            const features = map.queryRenderedFeatures(e.point, {
-                                layers: interactableLayers
-                            });
-
-                            if (!features || features.length === 0) {
-                                map.getCanvas().style.cursor = '';
-                                return;
-                            }
-
-                            // Change cursor to pointer if we hit something
-                            map.getCanvas().style.cursor = 'pointer';
-
-                            // Skip cluster features (DEPRECATED: Clusters removed)
-                            const topFeature = features[0];
-                            if (topFeature.properties?.cluster) return;
-
-                            // HOVER GUARD: Data integrity check for Luminous Engine
-                            // Anchors effectively bypassed as they use 'anchor-source'
-                            if (topFeature.source === 'luminary-mvt' && !topFeature.properties?.status) {
-                                return;
-                            }
-                        } catch (err) {
-                            // Fallback: Prevent PBF decoder exceptions from crashing the React runtime
-                            map.getCanvas().style.cursor = '';
-                        }
-                    }}
-                    interactiveLayerIds={
-                        // Ghost Hover Guard: Disable anchor interaction below Z12
-                        viewState.zoom < 12
-                            ? ["property-points", "hearth-pins"]
-                            : ["property-points", "hearth-pins", "anchor-icons"]
-                    }
-                    style={{ width: "100%", height: "100%" }}
-                    mapStyle={MAP_STYLE}
-                    attributionControl={false}
-                    reuseMaps
-                >
-                    {/* Satellite layer - High-Fi reality-focused imagery */}
-                    {viewMode === "satellite" && (
-                        <Source id="satellite-source" type="raster" tiles={[ARCGIS_SATELLITE_URL]} tileSize={256}>
-                            <Layer
-                                id="satellite-layer"
-                                type="raster"
-                                paint={{
-                                    "raster-brightness-min": 0.05,
-                                    "raster-contrast": 0.1,
-                                    "raster-saturation": 0,  // Hi-Fi 2025: natural greens and blues pop
-                                }}
-                            />
+                <div className="absolute inset-0 z-0 pointer-events-none">
+                    <Map
+                        ref={mapRef}
+                        {...viewState}
+                        onMove={evt => setViewState(evt.viewState)}
+                        onMoveEnd={handleMoveEnd}
+                        onLoad={handleLoad}
+                        onClick={handleMapClick}
+                        style={{ width: "100%", height: "100%", transition: "filter 0.5s cubic-bezier(0.19, 1, 0.22, 1)", filter: isTrayExpanded ? "blur(4px) brightness(0.7)" : "none", pointerEvents: "auto" }}
+                        mapStyle={MAP_STYLE}
+                        attributionControl={false}
+                        reuseMaps
+                    >
+                        {viewMode === "satellite" && (
+                            <Source id="satellite-source" type="raster" tiles={[ARCGIS_SATELLITE_URL]} tileSize={256}>
+                                <Layer id="satellite-layer" type="raster" paint={{ "raster-brightness-min": 0.05, "raster-contrast": 0.1, "raster-saturation": 0 }} />
+                            </Source>
+                        )}
+                        <Source id="luminary-mvt" type="vector" tiles={[getTileUrl()]}>
+                            <Layer id="discovery-heatmap" type="heatmap" source-layer="properties" maxzoom={12} paint={{ "heatmap-weight": ["get", "discovery_weight"], "heatmap-intensity": ["interpolate", ["linear"], ["zoom"], 0, 0.5, 11, 3], "heatmap-color": ["interpolate", ["linear"], ["heatmap-density"], 0, "rgba(255,255,255,0)", 0.1, "rgba(140,140,140,0.15)", 0.8, "rgba(224,142,95,0.8)", 1, "rgba(224,142,95,0.8)"], "heatmap-radius": ["interpolate", ["linear"], ["zoom"], 0, 2, 11, 15], "heatmap-opacity": ["interpolate", ["linear"], ["zoom"], 10, 1, 12, 0] }} />
+                            <Layer id="building-glow" type="circle" source-layer="properties" minzoom={11} filter={activeStatusFilters.length === 0 ? ['==', ['get', 'property_id'], 'NONE'] : ['all', ['in', ['get', 'status'], ['literal', activeStatusFilters]], ['==', ['get', 'has_active_intent'], true]]} paint={{ "circle-color": EMBER, "circle-opacity": 0, "circle-stroke-width": 4, "circle-stroke-color": EMBER, "circle-stroke-opacity": 0.4, "circle-radius": ["interpolate", ["linear"], ["zoom"], 15, 15, 17, 35, 19, 60], "circle-blur": 0.8 }} />
+                            <Layer id="hearth-pins" type="circle" source-layer="properties" minzoom={11} filter={activeStatusFilters.length === 0 ? ['==', ['get', 'property_id'], 'NONE'] : ['in', ['get', 'status'], ['literal', activeStatusFilters]]} layout={{ "circle-sort-key": ["match", ["get", "status"], "for_sale", 100, "open_to_talking", 90, "for_rent", 80, "settled", 50, 0] }} paint={{ "circle-color": ["match", ["get", "status"], "for_sale", EMBER, "for_rent", EMBER, "open_to_talking", EMBER, "settled", INK_GREY, "unclaimed", "#9CA3AF", "#9CA3AF"], "circle-radius": ["interpolate", ["linear"], ["zoom"], 11, 0, 12, ["match", ["get", "status"], "unclaimed", 2, "settled", 3, 6], 15, ["match", ["get", "status"], "unclaimed", 4, "settled", 6, 10]], "circle-opacity": ["interpolate", ["linear"], ["zoom"], 11, 0, 12, ["match", ["get", "status"], "unclaimed", 0.3, "settled", 0.6, 1]], "circle-stroke-width": 0 }} />
+                            <Layer id="hearth-pulse" type="circle" source-layer="properties" minzoom={11} filter={activeStatusFilters.length === 0 ? ['==', ['get', 'property_id'], 'NONE'] : ['all', ['in', ['get', 'status'], ['literal', activeStatusFilters]], ['==', ['get', 'has_active_intent'], true]]} paint={{ "circle-color": EMBER, "circle-radius": ["interpolate", ["linear"], ["zoom"], 12, ["*", 12, pulseRadius], 16, ["*", 28, pulseRadius]], "circle-opacity": ["*", 0.35, ["-", 1, pulseRadius]] }} />
+                            <Layer id="hearth-glyphs" type="symbol" source-layer="properties" minzoom={13} filter={activeStatusFilters.length === 0 ? ['==', ['get', 'property_id'], 'NONE'] : ['in', ['get', 'status'], ['literal', activeStatusFilters]]} layout={{ "text-field": ["match", ["get", "status"], "for_sale", "£", "for_rent", "r", "open_to_talking", "+", ""], "text-font": ["Open Sans Bold"], "text-size": ["interpolate", ["linear"], ["zoom"], 14, 9, 16, 11], "text-allow-overlap": true, "text-ignore-placement": true }} paint={{ "text-color": "#ffffff" }} />
+                            <Layer id="property-points" type="circle" source-layer="properties" minzoom={11} filter={activeStatusFilters.length === 0 ? ['==', ['get', 'property_id'], 'NONE'] : ['in', ['get', 'status'], ['literal', activeStatusFilters]]} paint={{ "circle-color": "#000000", "circle-radius": 8, "circle-opacity": 0, "circle-stroke-opacity": 0 }} />
                         </Source>
+                        {anchorData.features.length > 0 && (
+                            <Source id="anchor-source" type="geojson" data={anchorData}>
+                                <Layer id="anchor-radii" type="circle" filter={anchorTierFilter === 'all' ? true : ["==", ["get", "tier"], anchorTierFilter]} paint={{ "circle-radius": ["interpolate", ["exponential", 2], ["zoom"], 10, 12.5, 15, 400, 20, 12800], "circle-pitch-alignment": "map", "circle-color": EMBER, "circle-opacity": ["case", ["in", ["get", "id"], ["literal", lockedAnchorIds]], 0.1, ["==", ["get", "id"], activeAnchorId || ""], 0.1, 0], "circle-stroke-width": ["case", ["in", ["get", "id"], ["literal", lockedAnchorIds]], 2, ["==", ["get", "id"], activeAnchorId || ""], 2, 0], "circle-stroke-color": EMBER, "circle-stroke-opacity": 0.3 }} />
+                                <Layer id="anchor-icons" type="symbol" minzoom={11} filter={anchorTierFilter === 'all' ? true : ["==", ["get", "tier"], anchorTierFilter]} layout={{ "icon-image": ["case", ["==", ["get", "subtype"], "primary"], "hearth-school", ["==", ["get", "subtype"], "secondary"], "hearth-school", ["==", ["get", "subtype"], "metro"], "hearth-rail", ["==", ["get", "subtype"], "ferry"], "hearth-rail", ["==", ["get", "subtype"], "bus"], "hearth-rail", ["==", ["get", "subtype"], "park"], "hearth-park", ["==", ["get", "subtype"], "coastal"], "hearth-coastal", ["==", ["get", "subtype"], "village_center"], "hearth-village", ["==", ["get", "subtype"], "gp"], "hearth-health", ["==", ["get", "subtype"], "hospital"], "hearth-health", ["==", ["get", "subtype"], "dentist"], "hearth-health", ["==", ["get", "subtype"], "supermarket"], "hearth-shop", ["==", ["get", "subtype"], "convenience"], "hearth-shop", "hearth-park"], "icon-size": 1, "icon-allow-overlap": true, "icon-ignore-placement": true }} paint={{ "icon-opacity": ["interpolate", ["linear"], ["zoom"], 11.5, 0, 12, 1], "icon-color": ["case", ["in", ["get", "id"], ["literal", lockedAnchorIds]], EMBER, ["==", ["get", "id"], activeAnchorId || ""], EMBER, INK_GREY], "icon-halo-color": "#ffffff", "icon-halo-width": 1 }} />
+                                <Layer id="anchor-labels" type="symbol" minzoom={14} filter={anchorTierFilter === 'all' ? true : ["==", ["get", "tier"], anchorTierFilter]} layout={{ "text-field": ["get", "name"], "text-size": 10, "text-offset": [0, 1.2], "text-anchor": "top", "text-max-width": 8 }} paint={{ "text-color": ["case", ["in", ["get", "id"], ["literal", lockedAnchorIds]], EMBER, ["==", ["get", "id"], activeAnchorId || ""], EMBER, INK_GREY], "text-halo-color": "#ffffff", "text-halo-width": 1 }} />
+                            </Source>
+                        )}
+                    </Map>
+                    {isTrayExpanded && (
+                        <div className="absolute inset-0 z-40 cursor-pointer pointer-events-auto bg-black/5" onClick={(e) => { e.stopPropagation(); setIsTrayExpanded(false); }} aria-label="Dismiss Vibe Tray" />
                     )}
+                </div>
 
-
-
-                    {/* 
-                        LUMINOUS ENGINE MVT SOURCE 
-                        Uses sanitized vector tiles for Heatmap and Smart Pins 
-                    */}
-                    <Source id="luminary-mvt" type="vector" tiles={[getTileUrl()]}>
-                        {/* 
-                            LUMINOUS DISCOVERY LAYER (Heatmap)
-                            Visible Zoom: 0-12
-                            Intensity: Driven by 'discovery_weight' (Moat Logic)
-                        */}
-                        <Layer
-                            id="discovery-heatmap"
-                            type="heatmap"
-                            source-layer="properties"
-                            maxzoom={12}
-                            paint={{
-                                // Weight: 0.1 (unclaimed) to 1.0 (for_sale)
-                                "heatmap-weight": ["get", "discovery_weight"],
-                                // Intensity: Ramps up as we zoom in
-                                "heatmap-intensity": [
-                                    "interpolate", ["linear"], ["zoom"],
-                                    0, 0.5,
-                                    11, 3
-                                ],
-                                // Clinical Blueprint Color Ramp
-                                "heatmap-color": [
-                                    "interpolate", ["linear"], ["heatmap-density"],
-                                    0, "rgba(255,255,255,0)",
-                                    0.1, "rgba(140,140,140,0.15)", // Clinical Grey Tint (15%)
-                                    0.8, "rgba(224,142,95,0.8)",   // Ember Hotspot (80%)
-                                    1, "rgba(224,142,95,0.8)"      // Peak
-                                ],
-                                // Radius: Expands with zoom to maintain coverage
-                                "heatmap-radius": [
-                                    "interpolate", ["linear"], ["zoom"],
-                                    0, 2,
-                                    11, 15 // Sharpened Logic
-                                ],
-                                // Fade Out: Seamless transition to pins at zoom 12
-                                "heatmap-opacity": [
-                                    "interpolate", ["linear"], ["zoom"],
-                                    10, 1,
-                                    12, 0
-                                ]
-                            }}
-                        />
-
-                        {/* Hearth Halo - Building Glow Layer */}
-                        <Layer
-                            id="building-glow"
-                            type="circle"
-                            source-layer="properties"
-                            minzoom={11}
-                            filter={
-                                activeStatusFilters.length === 0
-                                    ? ['==', ['get', 'property_id'], 'NONE']
-                                    : ['all',
-                                        ['in', ['get', 'status'], ['literal', activeStatusFilters]],
-                                        ['==', ['get', 'has_active_intent'], true]
-                                    ]
-                            }
-                            paint={{
-                                "circle-color": EMBER,
-                                "circle-opacity": 0, // DONUT EFFECT: Transparent center to protect icon legibility
-                                "circle-stroke-width": 4,
-                                "circle-stroke-color": EMBER,
-                                "circle-stroke-opacity": 0.4,
-                                "circle-radius": [
-                                    "interpolate", ["linear"], ["zoom"],
-                                    15, 15,
-                                    17, 35,
-                                    19, 60
-                                ],
-                                "circle-blur": 0.8 // Soften the outer ring
-                            }}
-                        />
-
-                        {/* 
-                            SMART PRIORITY PINS 
-                            Visible Zoom: 11+
-                            Logic: Adaptive sizing + Semantic Stacking
-                        */}
-                        <Layer
-                            id="hearth-pins"
-                            type="circle"
-                            source-layer="properties"
-                            minzoom={11}
-                            filter={
-                                activeStatusFilters.length === 0
-                                    ? ['==', ['get', 'property_id'], 'NONE']
-                                    : ['in', ['get', 'status'], ['literal', activeStatusFilters]]
-                            }
-                            layout={{
-                                // SEMANTIC STACKING: Vital pins float to top
-                                "circle-sort-key": [
-                                    "match", ["get", "status"],
-                                    "for_sale", 100,
-                                    "open_to_talking", 90,
-                                    "for_rent", 80,
-                                    "settled", 50,
-                                    0  // unclaimed at bottom
-                                ]
-                            }}
-                            paint={{
-                                // 5-State Semantic Colors
-                                "circle-color": [
-                                    "match",
-                                    ["get", "status"],
-                                    "for_sale", EMBER,
-                                    "for_rent", EMBER,
-                                    "open_to_talking", EMBER,
-                                    "settled", INK_GREY,
-                                    "unclaimed", "#9CA3AF",
-                                    "#9CA3AF" // fallback
-                                ],
-                                // ADAPTIVE SIZING: Semantic Hierarchy
-                                "circle-radius": [
-                                    "interpolate", ["linear"], ["zoom"],
-                                    11, 0, // Pin-Drop: Start invisible
-                                    12, ["match", ["get", "status"],
-                                        "unclaimed", 2, // Tiny dot
-                                        "settled", 3,   // 50% of Intent
-                                        6               // Intent (6px)
-                                    ],
-                                    15, ["match", ["get", "status"],
-                                        "unclaimed", 4,
-                                        "settled", 6,
-                                        10
-                                    ]
-                                ],
-                                // SEMANTIC OPACITY: Blueprint Logic
-                                "circle-opacity": [
-                                    "interpolate", ["linear"], ["zoom"],
-                                    11, 0,
-                                    12, ["match", ["get", "status"],
-                                        "unclaimed", 0.3,
-                                        "settled", 0.6, // Blueprint Opacity
-                                        1               // Active Intent
-                                    ]
-                                ],
-                                "circle-stroke-width": 0,
-                            }}
-                        />
-
-                        {/* Living Pin Pulse Layer */}
-                        <Layer
-                            id="hearth-pulse"
-                            type="circle"
-                            source-layer="properties"
-                            minzoom={11}
-                            filter={
-                                activeStatusFilters.length === 0
-                                    ? ['==', ['get', 'property_id'], 'NONE']
-                                    : ['all',
-                                        ['in', ['get', 'status'], ['literal', activeStatusFilters]],
-                                        ['==', ['get', 'has_active_intent'], true]
-                                    ]
-                            }
-                            paint={{
-                                "circle-color": EMBER,
-                                "circle-radius": [
-                                    "interpolate", ["linear"], ["zoom"],
-                                    12, ["*", 12, pulseRadius],
-                                    16, ["*", 28, pulseRadius]
-                                ],
-                                "circle-opacity": ["*", 0.35, ["-", 1, pulseRadius]],
-                            }}
-                        />
-
-                        {/* Hearth Glyphs */}
-                        <Layer
-                            id="hearth-glyphs"
-                            type="symbol"
-                            source-layer="properties"
-                            minzoom={13}
-                            filter={
-                                activeStatusFilters.length === 0
-                                    ? ['==', ['get', 'property_id'], 'NONE']
-                                    : ['in', ['get', 'status'], ['literal', activeStatusFilters]]
-                            }
-                            layout={{
-                                "text-field": [
-                                    "match",
-                                    ["get", "status"],
-                                    "for_sale", "£",
-                                    "for_rent", "r",
-                                    "open_to_talking", "+",
-                                    ""
-                                ],
-                                "text-font": ["Open Sans Bold"],
-                                "text-size": [
-                                    "interpolate", ["linear"], ["zoom"],
-                                    14, 9,
-                                    16, 11
-                                ],
-                                "text-allow-overlap": true,
-                                "text-ignore-placement": true,
-                            }}
-                            paint={{
-                                "text-color": "#ffffff",
-                            }}
-                        />
-
-                        {/* Hidden sensor layer for click detection */}
-                        <Layer
-                            id="property-points"
-                            type="circle"
-                            source-layer="properties"
-                            minzoom={11}
-                            filter={
-                                activeStatusFilters.length === 0
-                                    ? ['==', ['get', 'property_id'], 'NONE']
-                                    : ['in', ['get', 'status'], ['literal', activeStatusFilters]]
-                            }
-                            paint={{
-                                "circle-color": "#000000",
-                                "circle-radius": 8,
-                                "circle-opacity": 0,
-                                "circle-stroke-opacity": 0,
-                            }}
-                        />
-                    </Source>
-
-                    {/* Neighborhood Anchors - Accurate 800m radii layer */}
-                    {anchorData.features.length > 0 && (
-                        <Source id="anchor-source" type="geojson" data={anchorData}>
-                            {/* Anchor Radii - 800m (10-minute walk) catchment circles */}
-                            {/* Uses exponential interpolation calibrated for UK latitude (55°N) */}
-                            <Layer
-                                id="anchor-radii"
-                                type="circle"
-                                filter={
-                                    anchorTierFilter === 'all'
-                                        ? true
-                                        : ["==", ["get", "tier"], anchorTierFilter]
-                                }
-                                paint={{
-                                    // High-precision 800m radius for UK latitude (55°N)
-                                    // Formula: 800m × (2^zoom) / (156543 × cos(55°))
-                                    "circle-radius": [
-                                        "interpolate", ["exponential", 2], ["zoom"],
-                                        10, 12.5,
-                                        15, 400,
-                                        20, 12800
-                                    ],
-                                    // Lie flat on ground in 3D view
-                                    "circle-pitch-alignment": "map",
-                                    // Morning Orbit: Ember fill at 10% opacity for active/locked
-                                    "circle-color": EMBER,
-                                    "circle-opacity": [
-                                        "case",
-                                        ["in", ["get", "id"], ["literal", lockedAnchorIds]],
-                                        0.1,
-                                        ["==", ["get", "id"], activeAnchorId || ""],
-                                        0.1,
-                                        0
-                                    ],
-                                    // Visual Trust: clear 10-minute walk boundary
-                                    "circle-stroke-width": [
-                                        "case",
-                                        ["in", ["get", "id"], ["literal", lockedAnchorIds]],
-                                        2,
-                                        ["==", ["get", "id"], activeAnchorId || ""],
-                                        2,
-                                        0
-                                    ],
-                                    "circle-stroke-color": EMBER,
-                                    "circle-stroke-opacity": 0.3
-                                }}
-                            />
-
-                            {/* Anchor Icons - Premium Symbol Layer with custom SVG icons */}
-                            {/* Uses INK_GREY base with white halo for editorial appearance */}
-                            <Layer
-                                id="anchor-icons"
-                                type="symbol"
-                                minzoom={11}
-                                filter={
-                                    anchorTierFilter === 'all'
-                                        ? true
-                                        : ["==", ["get", "tier"], anchorTierFilter]
-                                }
-                                layout={{
-                                    // Map subtype to hearth- prefixed icons loaded in handleLoad
-                                    "icon-image": [
-                                        "case",
-                                        // Schools (Foundational)
-                                        ["==", ["get", "subtype"], "primary"], "hearth-school",
-                                        ["==", ["get", "subtype"], "secondary"], "hearth-school",
-                                        // Transport (Practical)
-                                        ["==", ["get", "subtype"], "metro"], "hearth-rail",
-                                        ["==", ["get", "subtype"], "ferry"], "hearth-rail",
-                                        ["==", ["get", "subtype"], "bus"], "hearth-rail",
-                                        // Green Spaces (Spirit)
-                                        ["==", ["get", "subtype"], "park"], "hearth-park",
-                                        ["==", ["get", "subtype"], "coastal"], "hearth-coastal",
-                                        ["==", ["get", "subtype"], "village_center"], "hearth-village",
-                                        // Health (Practical)
-                                        ["==", ["get", "subtype"], "gp"], "hearth-health",
-                                        ["==", ["get", "subtype"], "hospital"], "hearth-health",
-                                        ["==", ["get", "subtype"], "dentist"], "hearth-health",
-                                        // Shops (Practical)
-                                        ["==", ["get", "subtype"], "supermarket"], "hearth-shop",
-                                        ["==", ["get", "subtype"], "convenience"], "hearth-shop",
-                                        "hearth-park"  // Default fallback
-                                    ],
-                                    "icon-size": 1,
-                                    "icon-allow-overlap": true,
-                                    "icon-ignore-placement": true
-                                }}
-                                paint={{
-                                    // VISUAL TRANSITION: Smooth fade-in (11.5 -> 12)
-                                    "icon-opacity": [
-                                        "interpolate", ["linear"], ["zoom"],
-                                        11.5, 0,
-                                        12, 1
-                                    ],
-                                    // GPU expression: EMBER if active/locked, INK_GREY otherwise (SDF coloring)
-                                    "icon-color": [
-                                        "case",
-                                        ["in", ["get", "id"], ["literal", lockedAnchorIds]],
-                                        EMBER,
-                                        ["==", ["get", "id"], activeAnchorId || ""],
-                                        EMBER,
-                                        INK_GREY
-                                    ],
-                                    "icon-halo-color": "#ffffff",
-                                    "icon-halo-width": 1
-                                }}
-                            />
-
-                            {/* Anchor Labels */}
-                            <Layer
-                                id="anchor-labels"
-                                type="symbol"
-                                minzoom={14}
-                                filter={
-                                    anchorTierFilter === 'all'
-                                        ? true
-                                        : ["==", ["get", "tier"], anchorTierFilter]
-                                }
-                                layout={{
-                                    "text-field": ["get", "name"],
-                                    "text-size": 10,
-                                    "text-offset": [0, 1.2],
-                                    "text-anchor": "top",
-                                    "text-max-width": 8
-                                }}
-                                paint={{
-                                    "text-color": [
-                                        "case",
-                                        ["in", ["get", "id"], ["literal", Array.from(lockedAnchorIds)]],
-                                        EMBER,
-                                        ["==", ["get", "id"], activeAnchorId || ""],
-                                        EMBER,
-                                        INK_GREY
-                                    ],
-                                    "text-halo-color": "#ffffff",
-                                    "text-halo-width": 1
-                                }}
-                            />
-                        </Source>
-                    )}
-
-
-                </Map>
-
-                {/* Floating Map Filter Bar - Clinical Discovery Experience */}
-                <div
-                    className={`absolute top-4 left-1/2 -translate-x-1/2 z-20 transition-all duration-700 ease-out transform pointer-events-none 
-                    ${isFilterMounted ? 'translate-y-0 opacity-100' : '-translate-y-8 opacity-0'}`}
-                >
+                {/* Floating Map Filter Bar */}
+                <div className={`absolute top-4 left-1/2 -translate-x-1/2 z-20 transition-all duration-700 ease-out transform pointer-events-none ${isFilterMounted ? 'translate-y-0 opacity-100' : '-translate-y-8 opacity-0'}`}>
                     <div className="flex flex-col items-center gap-2">
                         <div className="flex items-center bg-[#F9F7F2]/95 backdrop-blur-[24px] border border-[#1B1B1B]/10 rounded-full px-2 py-2 shadow-[0_10px_40px_-15px_rgba(0,0,0,0.1)] pointer-events-auto">
-                            {/* Mobile Toggle Trigger */}
-                            <button
-                                onClick={() => setIsFilterMobileExpanded(!isFilterMobileExpanded)}
-                                className="md:hidden flex items-center gap-2 px-4 py-1.5 rounded-full text-xs font-bold uppercase tracking-widest text-gray-500 hover:bg-gray-100/50"
-                            >
-                                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
-                                </svg>
+                            <button onClick={() => setIsFilterMobileExpanded(!isFilterMobileExpanded)} className="md:hidden flex items-center gap-2 px-4 py-1.5 rounded-full text-xs font-bold uppercase tracking-widest text-gray-500 hover:bg-gray-100/50">
+                                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" /></svg>
                                 <span>Filter</span>
                             </button>
-
-                            {/* Desktop/Expanded Filters */}
                             <div className={`${isFilterMobileExpanded ? 'flex flex-col' : 'hidden'} md:flex items-center gap-1.5 px-1`}>
-                                {/* For Sale Toggle */}
-                                <button
-                                    onClick={() => toggleStatusFilter('for_sale')}
-                                    className={`px-4 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-[0.2em] transition-all duration-300 transform active:scale-95 ${activeStatusFilters.includes('for_sale')
-                                        ? 'bg-[#E08E5F] text-white shadow-[0_0_15px_rgba(224,142,95,0.5)]'
-                                        : 'bg-white/40 text-gray-400 hover:bg-white/70'
-                                        }`}
-                                >
-                                    For Sale
-                                </button>
-
-                                {/* For Rent Toggle */}
-                                <button
-                                    onClick={() => toggleStatusFilter('for_rent')}
-                                    className={`px-4 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-[0.2em] transition-all duration-300 transform active:scale-95 ${activeStatusFilters.includes('for_rent')
-                                        ? 'bg-[#8C8C8C] text-white shadow-[0_0_15px_rgba(140,140,140,0.5)]'
-                                        : 'bg-white/40 text-gray-400 hover:bg-white/70'
-                                        }`}
-                                >
-                                    For Rent
-                                </button>
-
-                                {/* Open to Talking (Spirit) Toggle */}
-                                <button
-                                    onClick={() => toggleStatusFilter('open_to_talking')}
-                                    className={`relative px-4 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-[0.2em] transition-all duration-500 transform active:scale-95 overflow-hidden ${activeStatusFilters.includes('open_to_talking')
-                                        ? 'bg-white text-[#E08E5F] shadow-[0_0_20px_rgba(224,142,95,0.4)] ring-1 ring-[#E08E5F]/20'
-                                        : 'bg-white/40 text-gray-400 hover:bg-white/70'
-                                        }`}
-                                >
-                                    {activeStatusFilters.includes('open_to_talking') && (
-                                        <span className="absolute inset-0 bg-[#E08E5F]/5 animate-pulse" />
-                                    )}
+                                <button onClick={() => toggleStatusFilter('for_sale')} className={`px-4 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-[0.2em] transition-all duration-300 transform active:scale-95 ${activeStatusFilters.includes('for_sale') ? 'bg-[#E08E5F] text-white shadow-[0_0_15px_rgba(224,142,95,0.5)]' : 'bg-white/40 text-gray-400 hover:bg-white/70'}`}>For Sale</button>
+                                <button onClick={() => toggleStatusFilter('for_rent')} className={`px-4 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-[0.2em] transition-all duration-300 transform active:scale-95 ${activeStatusFilters.includes('for_rent') ? 'bg-[#8C8C8C] text-white shadow-[0_0_15px_rgba(140,140,140,0.5)]' : 'bg-white/40 text-gray-400 hover:bg-white/70'}`}>For Rent</button>
+                                <button onClick={() => toggleStatusFilter('open_to_talking')} className={`relative px-4 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-[0.2em] transition-all duration-500 transform active:scale-95 overflow-hidden ${activeStatusFilters.includes('open_to_talking') ? 'bg-white text-[#E08E5F] shadow-[0_0_20px_rgba(224,142,95,0.4)] ring-1 ring-[#E08E5F]/20' : 'bg-white/40 text-gray-400 hover:bg-white/70'}`}>
+                                    {activeStatusFilters.includes('open_to_talking') && <span className="absolute inset-0 bg-[#E08E5F]/5 animate-pulse" />}
                                     <span className="relative z-10">Open to Talking</span>
-                                    {activeStatusFilters.includes('open_to_talking') && (
-                                        <div className="absolute inset-0 rounded-full ring-1 ring-[#E08E5F]/30 animate-pulse pointer-events-none" />
-                                    )}
                                 </button>
-
-                                {/* Separator */}
                                 <div className="w-px h-4 bg-gray-200/60 mx-1" />
-
-                                {/* Settled Toggle */}
-                                <button
-                                    onClick={() => toggleStatusFilter('settled')}
-                                    className={`px-4 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-[0.2em] transition-all duration-300 transform active:scale-95 ${activeStatusFilters.includes('settled')
-                                        ? 'bg-[#4A4A4A] text-white shadow-md'
-                                        : 'bg-white/40 text-gray-400 hover:bg-white/70'
-                                        }`}
-                                >
-                                    Settled
-                                </button>
-
-                                {/* Unclaimed Toggle */}
-                                <button
-                                    onClick={() => toggleStatusFilter('unclaimed')}
-                                    className={`px-4 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-[0.2em] transition-all duration-300 transform active:scale-95 ${activeStatusFilters.includes('unclaimed')
-                                        ? 'bg-[#D4D0C8] text-gray-700 shadow-md'
-                                        : 'bg-white/40 text-gray-400 hover:bg-white/70'
-                                        }`}
-                                >
-                                    Unclaimed
-                                </button>
-
-                                {/* Separator & Control Buttons */}
+                                <button onClick={() => toggleStatusFilter('settled')} className={`px-4 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-[0.2em] transition-all duration-300 transform active:scale-95 ${activeStatusFilters.includes('settled') ? 'bg-[#4A4A4A] text-white shadow-md' : 'bg-white/40 text-gray-400 hover:bg-white/70'}`}>Settled</button>
+                                <button onClick={() => toggleStatusFilter('unclaimed')} className={`px-4 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-[0.2em] transition-all duration-300 transform active:scale-95 ${activeStatusFilters.includes('unclaimed') ? 'bg-[#D4D0C8] text-gray-700 shadow-md' : 'bg-white/40 text-gray-400 hover:bg-white/70'}`}>Unclaimed</button>
                                 <div className="w-px h-4 bg-gray-200/60 mx-1" />
-
-                                {/* All Button */}
-                                <button
-                                    onClick={selectAllFilters}
-                                    className="px-3 py-1.5 rounded-full text-[9px] font-bold uppercase tracking-widest text-gray-500 hover:bg-gray-100/50 transition-colors"
-                                >
-                                    All
-                                </button>
-
-                                {/* Clear Button */}
-                                <button
-                                    onClick={clearStatusFilters}
-                                    className="px-3 py-1.5 rounded-full text-[9px] font-bold uppercase tracking-widest text-[#E08E5F] hover:bg-[#E08E5F]/10 transition-colors"
-                                >
-                                    Clear
-                                </button>
+                                <button onClick={selectAllFilters} className="px-3 py-1.5 rounded-full text-[9px] font-bold uppercase tracking-widest text-gray-500 hover:bg-gray-100/50 transition-colors">All</button>
+                                <button onClick={clearStatusFilters} className="px-3 py-1.5 rounded-full text-[9px] font-bold uppercase tracking-widest text-[#E08E5F] hover:bg-[#E08E5F]/10 transition-colors">Clear</button>
                             </div>
                         </div>
                     </div>
                 </div>
 
-                {/* HEADER & HUD are now managed by HomeClient and GlassHUD */}
-
                 <GlassHUD
                     viewMode={viewMode}
                     setViewMode={(mode) => {
-                        // SKIN ISOLATION: Changing style never touches the camera.
                         setViewMode(mode);
-
-                        // SATELLITE DEFAULT: Always start in 2D (Pure Imagery)
-                        // User must explicitly toggle 3D ON if they want the Ghostly Skeleton
-                        if (mode === "satellite") {
-                            setIs3D(false);
-                        }
+                        if (mode === "satellite") setIs3D(false);
                     }}
                     is3D={is3D}
-                    setIs3D={(enabled) => {
-                        // PURE GEOMETRY TOGGLE: No longer linked to map pitch/tilt
-                        setIs3D(enabled);
-                    }}
+                    setIs3D={setIs3D}
                     onResetOrientation={() => {
                         const map = mapRef.current?.getMap();
-                        if (map) {
-                            // Standard Reset: North-up and Flat (Top-down)
-                            map.easeTo({
-                                bearing: 0,
-                                pitch: 0,
-                                duration: 1000
-                            });
-                        }
+                        if (map) map.easeTo({ bearing: 0, pitch: 0, duration: 1000 });
                     }}
-                    onZoomIn={() => {
-                        const map = mapRef.current?.getMap();
-                        map?.zoomIn({ duration: 300 });
-                    }}
-                    onZoomOut={() => {
-                        const map = mapRef.current?.getMap();
-                        map?.zoomOut({ duration: 300 });
-                    }}
+                    onZoomIn={() => mapRef.current?.getMap().zoomIn()}
+                    onZoomOut={() => mapRef.current?.getMap().zoomOut()}
                     isPitchActive={isPitchActive}
+                    currentVibeZone={currentVibeZone}
+                    isTrayExpanded={isTrayExpanded}
+                    setIsTrayExpanded={setIsTrayExpanded}
                 />
 
-                {/* Property card sheet */}
                 {selectedPropertyId && (
                     <PropertyCardSheet
                         propertyId={selectedPropertyId}
                         onClose={handleCloseSheet}
                         onClaimSuccess={handleClaimSuccess}
-                        onRefreshPins={async () => {
-                            // MVT refresh handled by tile cache
-                            mapRef.current?.getMap().triggerRepaint();
-                        }}
+                        onRefreshPins={async () => refreshIntentForProperty()}
                         initialOpenMode={pendingOpenMode}
                         initialConversationId={pendingConversationId}
                         onSelectNeighbour={(neighbourId, lat, lon) => {
-                            // Use unified openProperty for neighbour navigation
                             handleOpenProperty({ propertyId: neighbourId, lat, lon, openMode: "card" });
                         }}
                     />
                 )}
 
-                {/* Area Vibe Bar - hidden when cards are open */}
-                {showVibeBar && (
-                    <AreaVibeBar
-                        stats={vibeStats}
-                        events={liveFeedEvents}
-                        loading={vibeLoading}
-                        eventsLoading={liveFeedLoading}
-                        expanded={vibeBarExpanded}
-                        onToggleExpand={handleToggleVibeBar}
-                        onEventClick={handleEventClick}
-                    />
-                )}
-
-                {/* Global Inbox Overlay */}
                 {showMessageCentre && (
                     <GlobalInboxOverlay
                         onClose={() => setShowMessageCentre(false)}
@@ -1756,5 +802,6 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
     );
 });
 
-export default PropertyMap;
+PropertyMap.displayName = "PropertyMap";
 
+export default PropertyMap;
