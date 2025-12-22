@@ -30,6 +30,31 @@ export function getVibeAssetUrl(key: string, type: 'hero' | 'thumb' = 'hero'): s
     return url;
 }
 
+/**
+ * Finds the nearest VibeZone to a given coordinate.
+ * Used for contextual neighborhood imagery when property photos are missing.
+ */
+export function getVibeZoneAtCoordinate(lat: number, lon: number): VibeZone | null {
+    if (!lat || !lon) return null;
+
+    let nearestZone: VibeZone | null = null;
+    let minDistance = Infinity;
+
+    for (const zone of VIBE_ZONES) {
+        // Simple Euclidean distance (fine for local scale)
+        const dLat = zone.centroid[0] - lat;
+        const dLon = zone.centroid[1] - lon;
+        const distance = Math.sqrt(dLat * dLat + dLon * dLon);
+
+        if (distance < minDistance) {
+            minDistance = distance;
+            nearestZone = zone;
+        }
+    }
+
+    return nearestZone;
+}
+
 export const VIBE_ZONES: VibeZone[] = [
     {
         id: "tynemouth-village",

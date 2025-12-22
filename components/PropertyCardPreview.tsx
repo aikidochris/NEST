@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useCallback, useState, useMemo } from "react";
+import { motion } from "framer-motion";
 import type { PropertyPublic } from "@/types/property";
 import { PropertyImage } from "./PropertyImage";
 import { getChipStyle, getPublicLabel, getPinColor } from "@/lib/statusStyles";
@@ -25,18 +26,22 @@ interface PropertyCardPreviewProps {
     onViewHome: () => void;
     /** Whether to use mobile bottom sheet layout */
     isMobile?: boolean;
+    screenCoords?: { x: number; y: number } | null;
 }
 
 /**
  * Tier 1 Expanded Preview Card.
- * Shows hero image, title, story preview, intent chips, and "View home" CTA.
+ * Desktop: Spatially anchored floating card "Ember Card".
+ * Mobile: Bottom sheet.
  */
 export function PropertyCardPreview({
     property,
     onClose,
     onViewHome,
     isMobile = false,
+    screenCoords,
 }: PropertyCardPreviewProps) {
+    const [imgError, setImgError] = useState(false);
     // Proximity Guard: State for raw anchor data (cached in state)
     const [allAnchors, setAllAnchors] = useState<any[]>([]);
 
@@ -211,107 +216,59 @@ export function PropertyCardPreview({
         );
     }
 
-    // Desktop right-aligned panel layout
-    return (
-        <div
-            className="absolute top-20 right-4 w-[380px] bg-white dark:bg-gray-900 rounded-xl shadow-xl overflow-hidden z-40"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="property-preview-title"
-        >
-            {/* Hero image with close button */}
-            <div className="relative">
-                <PropertyImage
-                    src={property.cover_image_url}
-                    alt={title}
-                    aspectRatio="16:9"
-                />
-                {/* Close button */}
-                <button
-                    onClick={onClose}
-                    className="absolute top-3 right-3 p-2 bg-black/40 hover:bg-black/60 rounded-full text-white transition-colors"
-                    aria-label="Close"
-                >
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                    </svg>
-                </button>
-                {/* Photos available badge */}
-                {property.has_additional_images && (
-                    <div className="absolute bottom-3 right-3 px-2 py-1 bg-black/50 text-white text-xs rounded">
-                        Photos available
-                    </div>
-                )}
-            </div>
+    // Desktop Spatially Anchored Ember Card
+    // We don't return null if hasPosition is false, because that would prevent it from mounting
+    // and setting up the transition. Instead we hide it until coordinates are ready.
+    const hasPosition = !isMobile && !!screenCoords;
 
-            {/* Card body */}
-            <div className="p-4">
-                {/* Title */}
-                <h2
-                    id="property-preview-title"
-                    className="text-lg font-semibold text-gray-900 dark:text-white mb-2"
-                >
-                    {title}
-                </h2>
+    if (!isMobile) {
+        return (
+            <motion.div
+                layoutId={`property-card-${property.property_id}`}
+                className="absolute z-50 flex items-center gap-3 p-2 bg-white/70 backdrop-blur-xl rounded-[32px] shadow-2xl border border-white/50 cursor-pointer origin-center"
+                style={{
+                    left: screenCoords?.x ?? 0,
+                    top: screenCoords?.y ?? 0,
+                    visibility: hasPosition ? "visible" : "hidden",
+                }}
+                initial={{ opacity: 0, scale: 0.9, x: "-50%", y: "calc(-100% - 14px)" }}
+                animate={{ opacity: 1, scale: 1, x: "-50%", y: "calc(-100% - 24px)" }}
+                exit={{ opacity: 0, scale: 0.9, transition: { duration: 0.15 } }}
+                transition={{ type: "spring", stiffness: 300, damping: 25 }}
+                onClick={onViewHome}
+            >
+                {/* Thumbnail */}
+                <div className="relative w-12 h-12 rounded-full overflow-hidden border-2 border-white shadow-sm flex-shrink-0 bg-[#FDF8F3]">
+                    {(!imgError && (property.thumbnail_url || property.cover_image_url || property.hero_image_url)) ? (
+                        <img
+                            src={property.thumbnail_url || property.cover_image_url || property.hero_image_url || ''}
+                            alt={title}
+                            className="w-full h-full object-cover"
+                            onError={() => setImgError(true)}
+                        />
+                    ) : (
+                        <div className="w-full h-full bg-gradient-to-br from-orange-50 to-rose-50 flex items-center justify-center">
+                            <svg className="w-6 h-6 text-orange-200" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                <path d="M3 9.5L12 3L21 9.5V19C21 20.1046 20.1046 21 19 21H5C3.89543 21 3 20.1046 3 19V9.5Z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                                <path d="M12 17C13.1046 17 14 16.1046 14 15C14 13.8954 12 11 12 11C12 11 10 13.8954 10 15C10 16.1046 10.8954 17 12 17Z" fill="currentColor" />
+                            </svg>
+                        </div>
+                    )}
+                </div>
 
-                {/* Story preview */}
-                <p className="text-gray-600 dark:text-gray-400 text-sm leading-relaxed mb-4 line-clamp-3">
-                    {storyPreview}
-                </p>
+                {/* Info */}
+                <div className="flex flex-col pr-4">
+                    <span className="text-sm font-bold text-gray-900 leading-tight whitespace-nowrap">{title}</span>
+                    <span className="text-xs font-medium text-gray-600">
+                        {property.metadata?.price_text || property.display_label || "View Home"}
+                    </span>
+                </div>
+            </motion.div>
+        );
+    }
 
-                {/* Intent chips */}
-                {intentStatuses.length > 0 && (
-                    <div className="flex flex-wrap gap-2 mb-4">
-                        {intentStatuses.map((status) => {
-                            const { bg, text } = getChipStyle(status);
-                            const label = getPublicLabel(status);
-                            if (!label) return null;
-                            return (
-                                <span
-                                    key={status}
-                                    className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-full ${bg} ${text}`}
-                                >
-                                    <span
-                                        className="w-2 h-2 rounded-full"
-                                        style={{ backgroundColor: getPinColor(status) }}
-                                    />
-                                    {label}
-                                </span>
-                            );
-                        })}
-                    </div>
-                )}
-
-                {/* Proximity Guard - Walk time badges */}
-                {proximityAnchors.length > 0 ? (
-                    <div className="flex flex-wrap gap-2 mb-4">
-                        {proximityAnchors.map((anchor) => (
-                            <span
-                                key={anchor.id}
-                                className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-full bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400"
-                            >
-                                {anchor.walkMins} min walk to {anchor.name}
-                            </span>
-                        ))}
-                    </div>
-                ) : (
-                    <div className="mb-4">
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-full bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400">
-                            Quiet residential street
-                        </span>
-                    </div>
-                )}
-
-                {/* Primary CTA */}
-                <button
-                    onClick={onViewHome}
-                    className="w-full py-2.5 px-4 bg-gray-900 dark:bg-white text-white dark:text-gray-900 text-sm font-medium rounded-lg hover:bg-gray-800 dark:hover:bg-gray-100 transition-colors"
-                >
-                    View home
-                </button>
-            </div>
-        </div>
-    );
+    // Default return (should not be reached if not mobile and no position, but TypeScript safety)
+    return null;
 }
 
 // =============================================================================

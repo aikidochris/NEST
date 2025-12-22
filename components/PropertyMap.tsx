@@ -148,12 +148,23 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
     const [activeStatusFilters, setActiveStatusFilters] = useState<string[]>(['for_sale', 'for_rent', 'open_to_talking', 'settled', 'unclaimed']);
     const [isFilterMounted, setIsFilterMounted] = useState(false);
     const [isFilterMobileExpanded, setIsFilterMobileExpanded] = useState(false);
+    const [isMobile, setIsMobile] = useState(false);
+
+    // Initial mobile check
+    useEffect(() => {
+        const checkMobile = () => setIsMobile(window.innerWidth < 768);
+        checkMobile();
+        window.addEventListener('resize', checkMobile);
+        return () => window.removeEventListener('resize', checkMobile);
+    }, []);
+
     const [pendingOpenMode, setPendingOpenMode] = useState<"card" | "messages">("card");
     const [pendingConversationId, setPendingConversationId] = useState<string | null>(null);
     const [viewMode, setViewMode] = useState<"paper" | "satellite">("paper");
     const [is3D, setIs3D] = useState(false);
     const [isPitchActive, setIsPitchActive] = useState(false);
     const [isTrayExpanded, setIsTrayExpanded] = useState(false);
+    const [tileVersion, setTileVersion] = useState(0); // Cache-busting version for MVT tiles
 
     const { accessToken, user } = useAuth();
     const clusterAbortRef = useRef<AbortController | null>(null);
@@ -643,7 +654,9 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
     }, [viewState.latitude, viewState.longitude]);
 
     const refreshIntentForProperty = useCallback(() => {
-        mapRef.current?.getMap().triggerRepaint();
+        // Increment tile version to bust cache and force re-fetch
+        setTileVersion(v => v + 1);
+        console.log("[PropertyMap] Tile cache invalidated, forcing refresh...");
     }, []);
 
     const handleClaimSuccess = useCallback(() => {
@@ -712,7 +725,7 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
                                 <Layer id="satellite-layer" type="raster" paint={{ "raster-brightness-min": 0.05, "raster-contrast": 0.1, "raster-saturation": 0 }} />
                             </Source>
                         )}
-                        <Source id="luminary-mvt" type="vector" tiles={[getTileUrl()]}>
+                        <Source id="luminary-mvt" type="vector" tiles={[`${getTileUrl()}?v=${tileVersion}`]} key={`mvt-${tileVersion}`}>
                             <Layer id="discovery-heatmap" type="heatmap" source-layer="properties" maxzoom={12} paint={{ "heatmap-weight": ["get", "discovery_weight"], "heatmap-intensity": ["interpolate", ["linear"], ["zoom"], 0, 0.5, 11, 3], "heatmap-color": ["interpolate", ["linear"], ["heatmap-density"], 0, "rgba(255,255,255,0)", 0.1, "rgba(140,140,140,0.15)", 0.8, "rgba(224,142,95,0.8)", 1, "rgba(224,142,95,0.8)"], "heatmap-radius": ["interpolate", ["linear"], ["zoom"], 0, 2, 11, 15], "heatmap-opacity": ["interpolate", ["linear"], ["zoom"], 10, 1, 12, 0] }} />
                             <Layer id="building-glow" type="circle" source-layer="properties" minzoom={11} filter={activeStatusFilters.length === 0 ? ['==', ['get', 'property_id'], 'NONE'] : ['all', ['in', ['get', 'status'], ['literal', activeStatusFilters]], ['==', ['get', 'has_active_intent'], true]]} paint={{ "circle-color": EMBER, "circle-opacity": 0, "circle-stroke-width": 4, "circle-stroke-color": EMBER, "circle-stroke-opacity": 0.4, "circle-radius": ["interpolate", ["linear"], ["zoom"], 15, 15, 17, 35, 19, 60], "circle-blur": 0.8 }} />
                             <Layer id="hearth-pins" type="circle" source-layer="properties" minzoom={11} filter={activeStatusFilters.length === 0 ? ['==', ['get', 'property_id'], 'NONE'] : ['in', ['get', 'status'], ['literal', activeStatusFilters]]} layout={{ "circle-sort-key": ["match", ["get", "status"], "for_sale", 100, "open_to_talking", 90, "for_rent", 80, "settled", 50, 0] }} paint={{ "circle-color": ["match", ["get", "status"], "for_sale", EMBER, "for_rent", EMBER, "open_to_talking", EMBER, "settled", INK_GREY, "unclaimed", "#9CA3AF", "#9CA3AF"], "circle-radius": ["interpolate", ["linear"], ["zoom"], 11, 0, 12, ["match", ["get", "status"], "unclaimed", 2, "settled", 3, 6], 15, ["match", ["get", "status"], "unclaimed", 4, "settled", 6, 10]], "circle-opacity": ["interpolate", ["linear"], ["zoom"], 11, 0, 12, ["match", ["get", "status"], "unclaimed", 0.3, "settled", 0.6, 1]], "circle-stroke-width": 0 }} />
@@ -790,6 +803,8 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
                         onSelectNeighbour={(neighbourId, lat, lon) => {
                             handleOpenProperty({ propertyId: neighbourId, lat, lon, openMode: "card" });
                         }}
+                        mapRef={mapRef}
+                        isMobile={isMobile}
                     />
                 )}
 

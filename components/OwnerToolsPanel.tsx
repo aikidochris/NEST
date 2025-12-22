@@ -15,9 +15,10 @@ interface OwnerToolsPanelProps {
     onStatusUpdate?: (status: Status) => void;
     onStoryUpdate?: (story: string) => void;
     onCoverUpload?: (file: File) => void;
+    onUnclaim?: () => Promise<void>;
 }
 
-type ModalType = "none" | "story" | "status" | "album" | "cover";
+type ModalType = "none" | "story" | "status" | "album" | "cover" | "unclaim";
 
 interface Album {
     id: string;
@@ -47,9 +48,11 @@ export function OwnerToolsPanel({
     onStatusUpdate,
     onStoryUpdate,
     onCoverUpload,
+    onUnclaim,
 }: OwnerToolsPanelProps) {
     const [isOpen, setIsOpen] = useState(false);
     const [activeModal, setActiveModal] = useState<ModalType>("none");
+    const [isUnclaiming, setIsUnclaiming] = useState(false);
 
     // Story editing
     const [storyDraft, setStoryDraft] = useState(property.summary_text || "");
@@ -124,6 +127,20 @@ export function OwnerToolsPanel({
         setAlbums(prev => prev.map(album =>
             album.id === albumId ? { ...album, visibility } : album
         ));
+    };
+
+    // Handle unclaim confirmation
+    const handleUnclaimConfirm = async () => {
+        if (!onUnclaim) return;
+        setIsUnclaiming(true);
+        try {
+            await onUnclaim();
+            setActiveModal("none");
+        } catch (err) {
+            console.error("Failed to unclaim:", err);
+        } finally {
+            setIsUnclaiming(false);
+        }
     };
 
     return (
@@ -209,6 +226,17 @@ export function OwnerToolsPanel({
                                 </span>
                             )}
                         </button>
+
+                        {/* Unclaim this home (Ghost button) */}
+                        <button
+                            onClick={() => setActiveModal("unclaim")}
+                            className="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-gray-400 hover:text-red-500 bg-transparent rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors text-left mt-4 border border-dashed border-gray-200 dark:border-gray-700 hover:border-red-200"
+                        >
+                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+                            </svg>
+                            <span>Unclaim this home</span>
+                        </button>
                     </div>
                 )}
             </div>
@@ -265,8 +293,8 @@ export function OwnerToolsPanel({
                                         key={status}
                                         onClick={() => setSelectedStatus(status)}
                                         className={`w-full flex items-center gap-3 p-3 rounded-lg border-2 transition-colors ${isSelected
-                                                ? "border-gray-900 dark:border-white"
-                                                : "border-transparent bg-gray-50 dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-700"
+                                            ? "border-gray-900 dark:border-white"
+                                            : "border-transparent bg-gray-50 dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-700"
                                             }`}
                                     >
                                         <span
@@ -392,6 +420,58 @@ export function OwnerToolsPanel({
                                 className="w-full py-2 text-sm font-medium text-white bg-gray-900 dark:bg-white dark:text-gray-900 rounded-lg hover:bg-gray-800 dark:hover:bg-gray-100"
                             >
                                 Done
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Unclaim Confirmation Modal (Glass DNA) */}
+            {activeModal === "unclaim" && (
+                <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+                    <div
+                        className="absolute inset-0 bg-black/30 backdrop-blur-[12px]"
+                        onClick={() => !isUnclaiming && setActiveModal("none")}
+                    />
+                    <div className="relative bg-white/90 backdrop-blur-xl rounded-[32px] shadow-2xl w-full max-w-sm p-8 border border-white/50">
+                        {/* Icon */}
+                        <div className="w-16 h-16 mx-auto mb-6 rounded-full bg-orange-50 flex items-center justify-center">
+                            <svg className="w-8 h-8 text-orange-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+                            </svg>
+                        </div>
+
+                        <h3 className="text-xl font-bold text-gray-900 text-center mb-3">
+                            Ready to move on?
+                        </h3>
+                        <p className="text-sm text-gray-500 text-center leading-relaxed mb-8">
+                            This will remove your story and status from the map. The home will return to unclaimed.
+                        </p>
+
+                        <div className="flex flex-col gap-3">
+                            <button
+                                onClick={handleUnclaimConfirm}
+                                disabled={isUnclaiming}
+                                className="w-full py-3 text-sm font-medium text-white bg-red-500 hover:bg-red-600 rounded-2xl transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                            >
+                                {isUnclaiming ? (
+                                    <>
+                                        <svg className="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
+                                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                                        </svg>
+                                        Unclaiming...
+                                    </>
+                                ) : (
+                                    "Yes, unclaim this home"
+                                )}
+                            </button>
+                            <button
+                                onClick={() => setActiveModal("none")}
+                                disabled={isUnclaiming}
+                                className="w-full py-3 text-sm font-medium text-gray-600 hover:text-gray-900 bg-transparent rounded-2xl transition-colors disabled:opacity-50"
+                            >
+                                Keep my home
                             </button>
                         </div>
                     </div>
