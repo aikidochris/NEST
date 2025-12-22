@@ -691,7 +691,8 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
 
     return (
         <MapIntentProvider onRefresh={refreshIntentForProperty} onFlyTo={handleFlyToProperty} onOpenProperty={handleOpenProperty}>
-            <div className="relative w-full h-screen">
+            {/* USE 100dvh TO PREVENT BOTTOM OVERFLOW ON MOBILE/TABLET */}
+            <div className="relative w-full h-[100dvh] overflow-hidden">
                 <div className="absolute inset-0 z-0 pointer-events-none">
                     <Map
                         ref={mapRef}
@@ -700,10 +701,11 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
                         onMoveEnd={handleMoveEnd}
                         onLoad={handleLoad}
                         onClick={handleMapClick}
-                        style={{ width: "100%", height: "100%", transition: "filter 0.5s cubic-bezier(0.19, 1, 0.22, 1)", filter: isTrayExpanded ? "blur(4px) brightness(0.7)" : "none", pointerEvents: "auto" }}
+                        style={{ width: "100%", height: "100%", transition: "filter 0.5s cubic-bezier(0.19, 1, 0.22, 1)", filter: isTrayExpanded ? "blur(12px) brightness(0.6)" : "none", pointerEvents: "auto" }}
                         mapStyle={MAP_STYLE}
                         attributionControl={false}
                         reuseMaps
+                        interactiveLayerIds={["hearth-pins", "anchor-icons", "property-points"]}
                     >
                         {viewMode === "satellite" && (
                             <Source id="satellite-source" type="raster" tiles={[ARCGIS_SATELLITE_URL]} tileSize={256}>

@@ -7,8 +7,27 @@ export interface VibeZone {
     priceBand: string;
     description: string;
     centroid: [number, number]; // [lat, lon]
-    imageUrl: string;
+    imageUrl: string; // Legacy, to be deprecated
+    assetKey: string; // Maps to Supabase storage filename
     themeColor: string;
+}
+
+/**
+ * Resolves a Vibe Zone asset URL from our sovereign Supabase bucket.
+ * @param key The assetKey for the zone (e.g., "Tynemouth Village")
+ * @param type The asset type suffix (default: "hero")
+ * @returns The public URL for the asset
+ */
+export function getVibeAssetUrl(key: string, type: 'hero' | 'thumb' = 'hero'): string {
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    if (!supabaseUrl) {
+        console.error("[getVibeAssetUrl] NEXT_PUBLIC_SUPABASE_URL is not defined");
+        return '';
+    }
+    const encodedKey = encodeURIComponent(key);
+    const url = `${supabaseUrl}/storage/v1/object/public/Vibe%20Zones/${encodedKey}_${type}.jpg`;
+    console.log(`[getVibeAssetUrl] Resolving: ${key} -> ${url}`);
+    return url;
 }
 
 export const VIBE_ZONES: VibeZone[] = [
@@ -21,7 +40,8 @@ export const VIBE_ZONES: VibeZone[] = [
         tags: ["Beach", "Victorian", "Food & Drink", "Iconic"],
         priceBand: "£450k–£650k",
         description: "Picture-perfect streets with cafés, pubs, and weekend bustle. Strong community feel; everyone has a favourite coffee stop. A mix of families, professionals, and coastal die-hards.",
-        imageUrl: "/images/zones/tynemouth.jpg",
+        imageUrl: "https://images.unsplash.com/photo-1543831818-6058286f9160?q=80&w=1200",
+        assetKey: "Tynemouth Village",
         themeColor: "#E08E5F" // Warm terracotta for the village
     },
     {
@@ -33,7 +53,8 @@ export const VIBE_ZONES: VibeZone[] = [
         tags: ["Beach", "Views", "Coastal Walks"],
         priceBand: "£260k–£400k",
         description: "Quieter than the village but closer to the sand. Popular with downsizers and sunrise chasers. Great access to the Priory, the Pier, and the beach paths.",
-        imageUrl: "/images/zones/priory.jpg",
+        imageUrl: "https://images.unsplash.com/photo-1629119619142-b0521e643981?q=80&w=1200",
+        assetKey: "Tynemouth Priory Lower",
         themeColor: "#6B9AC4" // Coastal blue
     },
     {
@@ -45,7 +66,8 @@ export const VIBE_ZONES: VibeZone[] = [
         tags: ["Beach", "Community", "Indie Food"],
         priceBand: "£220k–£320k",
         description: "Strong local identity with year-round activity. Creative, family-friendly, and occasionally salty (in the best way). The harbour is the heartbeat.",
-        imageUrl: "/images/zones/cullercoats.jpg",
+        imageUrl: "https://images.unsplash.com/photo-1620986961436-120054ccf675?q=80&w=1200",
+        assetKey: "Cullercoats",
         themeColor: "#D4A373" // Sand/Harbour stone
     },
     {
@@ -57,7 +79,8 @@ export const VIBE_ZONES: VibeZone[] = [
         tags: ["Beach", "Regeneration", "Family"],
         priceBand: "£240k–£340k",
         description: "A real mix: young families, commuters, and long-timers. Strong walking culture — prom strolls are a daily ritual. Plenty of great schools and pocket parks nearby.",
-        imageUrl: "/images/zones/whitley-bay.jpg",
+        imageUrl: "https://images.unsplash.com/photo-1620986961448-6923c89cc527?q=80&w=1200",
+        assetKey: "Whitley Bay (Central)",
         themeColor: "#F4A261" // Bright sunset/promenade
     },
     {
@@ -69,7 +92,8 @@ export const VIBE_ZONES: VibeZone[] = [
         tags: ["Schools", "Family", "Suburban Calm"],
         priceBand: "£240k–£330k",
         description: "Well-loved by families for its layout and green spaces. Good access to the coast without the crowds. Consistent, dependable housing stock.",
-        imageUrl: "/images/zones/whitley-lodge.jpg",
+        imageUrl: "https://images.pexels.com/photos/280222/pexels-photo-280222.jpeg?w=1200",
+        assetKey: "Preston Village  Marden  Whitley Lodge",
         themeColor: "#81B29A" // Suburban green
     },
     {
@@ -81,7 +105,8 @@ export const VIBE_ZONES: VibeZone[] = [
         tags: ["Village Feel", "Metro", "Family"],
         priceBand: "£240k–£340k",
         description: "Strong identity around the Metro and village centre. Good schools draw people in. Quiet streets but a lively pub culture around the heart of the village.",
-        imageUrl: "/images/zones/monkseaton.jpg",
+        imageUrl: "https://images.unsplash.com/photo-1574007557239-afead4096d13?q=80&w=1200",
+        assetKey: "Monkseaton and West Monkseaton",
         themeColor: "#4F772D" // Leafy village green
     },
     {
@@ -93,7 +118,8 @@ export const VIBE_ZONES: VibeZone[] = [
         tags: ["Green Space", "Family", "Quiet"],
         priceBand: "£260k–£380k",
         description: "Strong school catchment appeal. Wider streets, bigger gardens, quieter pace. Walkable to coast, Metro, and parks.",
-        imageUrl: "/images/zones/west-monkseaton.jpg",
+        imageUrl: "https://images.pexels.com/photos/1396122/pexels-photo-1396122.jpeg?w=1200",
+        assetKey: "Monkseaton and West Monkseaton",
         themeColor: "#90BE6D" // Lighter green
     },
     {
@@ -105,7 +131,8 @@ export const VIBE_ZONES: VibeZone[] = [
         tags: ["Schools", "Suburban Appeal", "Family"],
         priceBand: "£240k–£350k",
         description: "Reliable housing with long-term residents. Great access to Tynemouth and town centre. Often chosen for schools and quieter residential streets.",
-        imageUrl: "/images/zones/preston.jpg",
+        imageUrl: "https://images.pexels.com/photos/186077/pexels-photo-186077.jpeg?w=1200",
+        assetKey: "Preston Village  Marden  Whitley Lodge",
         themeColor: "#577590" // Slate blue/grey
     },
     {
@@ -117,7 +144,8 @@ export const VIBE_ZONES: VibeZone[] = [
         tags: ["Family", "Schools", "Value"],
         priceBand: "£180k–£260k",
         description: "Very distinctive layout and local identity. A popular stepping-stone for young families. Seen as solid, friendly and predictable.",
-        imageUrl: "/images/zones/marden.jpg",
+        imageUrl: "https://images.pexels.com/photos/210617/pexels-photo-210617.jpeg?w=1200",
+        assetKey: "Preston Village  Marden  Whitley Lodge",
         themeColor: "#43AA8B" // Structured green
     },
     {
@@ -129,7 +157,8 @@ export const VIBE_ZONES: VibeZone[] = [
         tags: ["Character", "Value", "Community"],
         priceBand: "£150k–£230k",
         description: "Very strong local roots. Quick access to A19 and the coast. More affordable without feeling disconnected.",
-        imageUrl: "/images/zones/new-york.jpg",
+        imageUrl: "https://images.pexels.com/photos/101808/pexels-photo-101808.jpeg?w=1200",
+        assetKey: "New_York",
         themeColor: "#F9844A" // Energetic orange
     },
     {
@@ -141,7 +170,8 @@ export const VIBE_ZONES: VibeZone[] = [
         tags: ["New Builds", "Community", "Transport"],
         priceBand: "£170k–£260k",
         description: "Fast-growing with recent development. Popular with families and first-time buyers. Good access to A19, Silverlink, and Metro.",
-        imageUrl: "/images/zones/shiremoor.jpg",
+        imageUrl: "https://images.pexels.com/photos/4513940/pexels-photo-4513940.jpeg?w=1200",
+        assetKey: "Shiremoor  Backworth  West Allotment  Murton",
         themeColor: "#277DA1" // Transport blue
     },
     {
@@ -153,7 +183,8 @@ export const VIBE_ZONES: VibeZone[] = [
         tags: ["Golf", "New Builds", "Calm"],
         priceBand: "£220k–£350k",
         description: "Backworth Hall adds character and green space. Newer housing stock attracts long-term movers. A quieter base with wide roads.",
-        imageUrl: "/images/zones/backworth.jpg",
+        imageUrl: "https://images.pexels.com/photos/2102587/pexels-photo-2102587.jpeg?w=1200",
+        assetKey: "Shiremoor  Backworth  West Allotment  Murton",
         themeColor: "#588157" // Heritage green
     },
     {
@@ -165,7 +196,8 @@ export const VIBE_ZONES: VibeZone[] = [
         tags: ["Community", "Green Space", "Walkability"],
         priceBand: "£170k–£260k",
         description: "Small, tight-knit residential pockets. Walkable to Rising Sun Country Park. Good access to Silverlink and Metro.",
-        imageUrl: "/images/zones/west-allotment.jpg",
+        imageUrl: "https://images.pexels.com/photos/259588/pexels-photo-259588.jpeg?w=1200",
+        assetKey: "Shiremoor  Backworth  West Allotment  Murton",
         themeColor: "#A3B18A" // Muted organic green
     },
     {
@@ -177,7 +209,8 @@ export const VIBE_ZONES: VibeZone[] = [
         tags: ["Greenery", "Character", "Quiet"],
         priceBand: "£180k–£280k",
         description: "A small rural feeling pocket tucked between estates. Popular with walkers and those wanting space. Old lane layouts feel very different.",
-        imageUrl: "/images/zones/murton.jpg",
+        imageUrl: "https://images.pexels.com/photos/53610/pexels-photo-53610.jpeg?w=1200",
+        assetKey: "Shiremoor  Backworth  West Allotment  Murton",
         themeColor: "#606C38" // Deep rural green
     },
     {
@@ -189,7 +222,8 @@ export const VIBE_ZONES: VibeZone[] = [
         tags: ["Food", "Waterfront", "Character"],
         priceBand: "£180k–£280k",
         description: "A real destination for eating out. Quiet on weekdays, lively on weekends. Popular with downsizers and professionals.",
-        imageUrl: "/images/zones/fish-quay.jpg",
+        imageUrl: "https://images.unsplash.com/photo-1605342417711-2f3b97669d0d?q=80&w=1200",
+        assetKey: "North Shields – Fish Quay",
         themeColor: "#264653" // Deep water/industrial
     },
     {
@@ -201,7 +235,8 @@ export const VIBE_ZONES: VibeZone[] = [
         tags: ["Value", "Transport", "Character"],
         priceBand: "£120k–£200k",
         description: "Excellent Metro and bus links. Affordable and varied housing. Some of the best views if you know where to look.",
-        imageUrl: "/images/zones/north-shields.jpg",
+        imageUrl: "https://images.pexels.com/photos/273204/pexels-photo-273204.jpeg?w=1200",
+        assetKey: "North Shields Town  Royal Quays",
         themeColor: "#E9C46A" // Vibrant urban yellow
     },
     {
@@ -213,7 +248,8 @@ export const VIBE_ZONES: VibeZone[] = [
         tags: ["Waterfront", "Modern Builds", "Transport"],
         priceBand: "£150k–£240k",
         description: "Cosy, modern developments around a marina. Great for commuters and coastal runners. Close to retail, cinema, and ferry links.",
-        imageUrl: "/images/zones/royal-quays.jpg",
+        imageUrl: "https://images.pexels.com/photos/1634262/pexels-photo-1634262.jpeg?w=1200",
+        assetKey: "North Shields Town  Royal Quays",
         themeColor: "#2A9D8F" // Marine teal
     }
 ];
