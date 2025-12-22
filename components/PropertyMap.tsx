@@ -562,24 +562,39 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
         // Hide commercial POIs
         hideCommercialPOIs(map);
 
-        // Explicit layer ordering
+        // Explicit layer ordering: Satellite must be at the very bottom (Index 0)
         if (map.getLayer("satellite-layer")) {
             try {
-                const firstLayerId = map.getStyle().layers?.[0]?.id;
+                const layers = map.getStyle().layers || [];
+                const firstLayerId = layers[0]?.id;
                 if (firstLayerId && firstLayerId !== "satellite-layer") {
                     map.moveLayer("satellite-layer", firstLayerId);
                 }
             } catch { /* ignore */ }
         }
 
+        // 3D Buildings sit above satellite but below pins
         if (map.getLayer("building-3d")) {
             try {
                 map.moveLayer("building-3d");
             } catch { /* ignore */ }
         }
 
-        // Move pin layers to very top (ensure JSX layers aren't buried)
-        ["hearth-pins", "hearth-pulse", "hearth-glyphs"].forEach(id => {
+        // Move ALL Hearth layers to very top (ensure JSX layers aren't buried)
+        // Order matters: bottom-to-top of this list
+        const TOP_LAYERS = [
+            "discovery-heatmap",
+            "building-glow",
+            "property-points", // Invisible hit target
+            "anchor-radii",
+            "anchor-labels",
+            "anchor-icons",
+            "hearth-pins",
+            "hearth-pulse",
+            "hearth-glyphs"
+        ];
+
+        TOP_LAYERS.forEach(id => {
             if (map.getLayer(id)) {
                 try { map.moveLayer(id); } catch { /* ignore */ }
             }
@@ -670,23 +685,17 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
                 const targetVisibility = isSatellite ? "none" : "visible";
 
                 layers.forEach(l => {
-                    // If it's one of our custom layers, LEAVE IT ALONE
                     if (HEARTH_LAYERS.includes(l.id)) return;
 
-                    // Otherwise: Force override visibility (no optimization check to ensure consistency)
+                    // FORCE UPDATE: No checks, just enforce visibility
                     try {
                         map.setLayoutProperty(l.id, "visibility", targetVisibility);
-                    } catch (e) {
-                        // Layer might be missing or locked
-                    }
+                    } catch { /* ignore */ }
                 });
             };
 
             // Run immediately
             performClean();
-
-            // Run again on next tick to catch any race conditions
-            setTimeout(performClean, 50);
         };
 
         // Stack layers: Satellite (bottom) -> Buildings (if 3D) -> Pins (top)
@@ -711,7 +720,9 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
                             map.moveLayer("satellite-layer", firstLayerId);
                         }
                     }
-                } catch { /* ignore */ }
+                } catch (e) {
+                    /* ignore */
+                }
             }
 
             // 2. 3D buildings above satellite
@@ -727,13 +738,31 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
                         // If neither exists yet, just move it to top of stack so far
                         map.moveLayer("building-3d");
                     }
-                } catch { /* ignore */ }
+                } catch (e) {
+                    /* ignore */
+                }
             }
 
             // 3. Hearth pin layers on very top (in order: pins, pulse, glyphs)
-            ["hearth-pins", "hearth-pulse", "hearth-glyphs", "property-points"].forEach(id => {
+            const TOP_LAYERS = [
+                "discovery-heatmap",
+                "building-glow",
+                "property-points",
+                "anchor-radii",
+                "anchor-labels",
+                "anchor-icons",
+                "hearth-pins",
+                "hearth-pulse",
+                "hearth-glyphs"
+            ];
+
+            TOP_LAYERS.forEach(id => {
                 if (map.getLayer(id)) {
-                    try { map.moveLayer(id); } catch { /* ignore */ }
+                    try {
+                        map.moveLayer(id);
+                    } catch (e) {
+                        /* ignore */
+                    }
                 }
             });
         };
@@ -746,10 +775,7 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
             hideCommercialPOIs(map);
 
             // Handle 3D mode - buildings available in ALL modes when is3D is true
-            // Pitch is now controlled by the smooth pitch coupling useEffect and 2D toggle
             if (is3D) {
-                // If switching styles, we might need to update the building styling (Ghost vs Solid)
-                // Remove and re-add to force style update
                 remove3DBuildings();
                 add3DBuildings();
             } else {
@@ -769,17 +795,93 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
         // Listen for style.load to re-add our custom layers after style changes
         map.on("style.load", handleStyleUpdate);
 
-        // Initial update if style is already loaded
+        // POLLING ENFORCER: Brute-force stability for the first few seconds
+        // This covers any React rendering delays without risking infinite recursion events
+
+        // 1. Immediate Execution
         if (map.isStyleLoaded()) {
-            handleStyleUpdate();
-        } else {
-            map.once("style.load", handleStyleUpdate);
+            cleanSatelliteLens();
+            // stackLayers(); // Keep simpler logic for immediate
+            ensurePinLayers();
+
+            // Re-apply 3D state
+            if (is3D) {
+                remove3DBuildings();
+                add3DBuildings();
+            } else {
+                remove3DBuildings();
+            }
         }
+
+        // 2. The Polling Loop (Every 200ms for 2 seconds)
+        const pollingInterval = setInterval(() => {
+            if (!map.isStyleLoaded()) return;
+
+            // Only spam logs if we are strictly debugging, otherwise keep clean
+            // console.log("Enforcing View State: Tick"); 
+
+            cleanSatelliteLens();
+
+            // Only enforce stacking if in satellite mode (critical for pins)
+            if (viewMode === 'satellite') {
+                stackLayers();
+                ensurePinLayers();
+            }
+        }, 200);
+
+        // Stop polling after 2 seconds (sufficient for React to settle)
+        const stopPollingTimer = setTimeout(() => {
+            clearInterval(pollingInterval);
+        }, 2000);
 
         return () => {
             map.off("style.load", handleStyleUpdate);
+            clearInterval(pollingInterval);
+            clearTimeout(stopPollingTimer);
         };
     }, [viewMode, is3D, ensurePinLayers]); // Re-run when viewMode changes to update visuals
+
+    // SATELLITE LENS ENFORCER: Dedicated effect to force-hide basemap layers on viewMode change
+    // This catches race conditions where the main useEffect runs before layers are fully loaded
+    useEffect(() => {
+        const map = mapRef.current?.getMap();
+        if (!map) return;
+
+        const enforceCleanLens = () => {
+            if (viewMode !== "satellite") return;
+            if (!map.isStyleLoaded()) return;
+
+            const layers = map.getStyle().layers || [];
+            const HEARTH_LAYERS = [
+                "satellite-layer", "building-3d", "discovery-heatmap",
+                "building-glow", "hearth-pins", "hearth-pulse",
+                "hearth-glyphs", "property-points", "anchor-radii",
+                "anchor-icons", "anchor-labels"
+            ];
+
+            layers.forEach(l => {
+                if (HEARTH_LAYERS.includes(l.id)) return;
+                try {
+                    map.setLayoutProperty(l.id, "visibility", "none");
+                } catch { /* ignore */ }
+            });
+        };
+
+        // Run immediately if style is loaded
+        if (map.isStyleLoaded()) {
+            enforceCleanLens();
+        }
+
+        // Run on idle to catch all race conditions
+        map.once("idle", enforceCleanLens);
+
+        // Run after a delay as final fallback
+        const timer = setTimeout(enforceCleanLens, 200);
+
+        return () => {
+            clearTimeout(timer);
+        };
+    }, [viewMode]);
 
     // Handle map click - cluster zoom or property select
     const handleMapClick = useCallback(
@@ -1084,7 +1186,6 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
                             <Layer
                                 id="satellite-layer"
                                 type="raster"
-                                beforeId="water"
                                 paint={{
                                     "raster-brightness-min": 0.05,
                                     "raster-contrast": 0.1,
