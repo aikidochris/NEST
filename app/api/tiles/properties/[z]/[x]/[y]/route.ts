@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { createAnonClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
 
@@ -39,8 +39,8 @@ export async function GET(
     }
 
     try {
-        const supabase = createAnonClient();
-        const { data, error } = await supabase.rpc("properties_mvt_b64", { z: zi, x: xi, y: yi });
+        const supabase = createAdminClient();
+        const { data, error } = await supabase.rpc("get_properties_mvt", { z: zi, x: xi, y: yi });
 
         if (error) {
             logErrorThrottled("[/api/tiles] RPC error", { z: zi, x: xi, y: yi, error });
@@ -53,17 +53,35 @@ export async function GET(
             });
         }
 
-        if (!data || typeof data !== "string") {
+        if (!data) {
             return new Response(EMPTY, { status: 200 });
         }
 
-        const bytes = Uint8Array.from(Buffer.from(data, "base64"));
+        // Supabase returns bytea as a hex string starting with \x.
+        // We must convert this to binary (Buffer) for MapLibre to parse it.
+        let bytes: Buffer | string | any = data;
+        if (typeof data === "string") {
+            if (data.startsWith("\\x")) {
+                bytes = Buffer.from(data.substring(2), "hex");
+            } else if (/^[0-9a-fA-F]+$/.test(data)) {
+                bytes = Buffer.from(data, "hex");
+            } else {
+                // Fallback for base64 or raw string
+                const maybeBase64 = Buffer.from(data, "base64");
+                // Check if it's likely binary (non-printable chars) or if base64 decoding worked meaningfully
+                bytes = maybeBase64;
+            }
+        }
+
+        if (!bytes || bytes.length === 0) {
+            return new Response(null, { status: 204 });
+        }
 
         return new Response(bytes, {
             status: 200,
             headers: {
                 "Content-Type": "application/vnd.mapbox-vector-tile",
-                "Cache-Control": "public, max-age=86400",
+                "Cache-Control": "public, max-age=3600",
             },
         });
     } catch (err) {

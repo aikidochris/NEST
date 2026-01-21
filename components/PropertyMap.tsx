@@ -44,7 +44,7 @@ const DEBOUNCE_MS = 200; // Debounce for Vibe Stats
 
 // Tile URL must be absolute to prevent MapLibre parsing errors in some contexts
 const getTileUrl = () => {
-    if (typeof window === "undefined") return ""; // SSR safety
+    if (typeof window === "undefined") return "/api/tiles/properties/{z}/{x}/{y}";
     return `${window.location.origin}/api/tiles/properties/{z}/{x}/{y}`;
 };
 
@@ -401,6 +401,9 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
                 fetchVibeStats(bbox);
             }
 
+            // Force a refresh of map tiles on load
+            setTileVersion(v => v + 1);
+
             try {
                 (map as unknown as { setFog: (options: object) => void }).setFog({
                     color: PAPER,
@@ -605,25 +608,38 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
     const handleMapClick = useCallback(async (evt: MapLayerMouseEvent) => {
         try {
             const features = evt.features;
+            console.log('[MapClick] Features at click:', features?.map(f => f.layer?.id));
+
             if (!features || features.length === 0) return;
-            if (features[0].source?.includes('cluster') || features[0].properties?.cluster) return;
+            if (features[0].source?.includes('cluster') || features[0].properties?.cluster) {
+                console.log('[MapClick] Cluster clicked');
+                return;
+            }
 
             const anchorFeature = features.find((f) => f.layer?.id === "anchor-icons");
             if (anchorFeature && anchorFeature.properties?.id) {
+                console.log('[MapClick] Anchor clicked:', anchorFeature.properties.id);
                 handleAnchorClick(anchorFeature.properties.id);
                 return;
             }
 
             const feature = features.find((f) => f.layer?.id === "hearth-pins" || f.layer?.id === "property-points");
-            if (!feature || !feature.properties?.status) return;
+            if (feature) {
+                const propertyId = feature.properties?.property_id;
+                const status = feature.properties?.status;
+                console.log('[MapClick] Property feature found:', { propertyId, status });
 
-            const propertyId = feature.properties.property_id;
-            if (propertyId) {
-                setPendingOpenMode("card");
-                setPendingConversationId(null);
-                setSelectedPropertyId(propertyId);
+                if (propertyId) {
+                    setPendingOpenMode("card");
+                    setPendingConversationId(null);
+                    setSelectedPropertyId(propertyId);
+                } else {
+                    console.log('[MapClick] No property_id in feature properties:', feature.properties);
+                }
+            } else {
+                console.log('[MapClick] No property feature found');
             }
-        } catch (e) { console.debug('handleMapClick error:', e); }
+        } catch (e) { console.error('[MapClick] Error:', e); }
     }, [handleAnchorClick]);
 
     const handleCloseSheet = useCallback(() => {

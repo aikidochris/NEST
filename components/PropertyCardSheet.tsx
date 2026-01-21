@@ -69,41 +69,50 @@ export function PropertyCardSheet({
         async function fetchProperty() {
             setLoading(true);
             setError(null);
+            console.log('[CardSheet] Fetching property:', propertyId);
 
             try {
                 const response = await fetch(`/api/properties?id=${propertyId}`);
 
                 if (!response.ok) {
                     const text = await response.text();
+                    console.error('[CardSheet] API Error:', response.status, text);
                     throw new Error(`HTTP ${response.status}: ${text}`);
                 }
 
                 const json = await response.json();
+                console.log('[CardSheet] API Response:', json);
 
                 if (!json.ok) {
                     throw new Error(json.error?.message || "Failed to load property");
                 }
 
                 if (!cancelled) {
-                    const found = json.data?.find?.((p: PropertyPublic) => p.property_id === propertyId);
+                    // Handle both array and single object response
                     let propertyData: PropertyPublic | null = null;
-
-                    if (found) {
-                        propertyData = found;
-                    } else if (json.data) {
+                    if (Array.isArray(json.data)) {
+                        propertyData = json.data.find?.((p: PropertyPublic) => p.property_id === propertyId);
+                    } else if (json.data && json.data.property_id === propertyId) {
                         propertyData = json.data;
-                    } else {
+                    }
+
+                    if (!propertyData) {
+                        console.error('[CardSheet] Property not found in response:', propertyId);
                         throw new Error("Property not found");
                     }
 
+                    console.log('[CardSheet] Found property data:', propertyData.display_label);
+
                     // Check ownership via property_claims table
                     const isMine = await isPropertyMine(supabase, propertyId);
+                    console.log('[CardSheet] Is mine:', isMine);
 
                     // Enrich with ownership status
                     const enrichedProperty = { ...propertyData, is_mine: isMine } as PropertyPublic;
                     setProperty(enrichedProperty);
                 }
             } catch (err) {
+                console.error('[CardSheet] Error in fetchProperty:', err);
                 if (!cancelled) {
                     setError(err instanceof Error ? err.message : "Unknown error");
                 }

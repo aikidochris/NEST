@@ -70,7 +70,9 @@ export async function findConversationBetweenUsers(
 }
 
 /**
- * Get an existing conversation between the current user and a property owner.
+ * Get an existing conversation for a property involving the current user.
+ * For viewers, finds their conversation with the owner.
+ * For owners, finds their most recent conversation for the property.
  * Returns null if no conversation exists.
  */
 export async function getConversationForProperty(
@@ -90,15 +92,14 @@ export async function getConversationForProperty(
     if (!claim) return null;
 
     const ownerId = claim.user_id;
-    if (ownerId === user.id) return null; // Owner can't message themselves
 
-    // Check if conversation already exists
+    // Check if conversation already exists (user is either creator or owner)
+    // This allows owners to see their most recent conversation if they open the panel
     const { data: existingConvRows, error: convError } = await supabase
         .from("conversations")
         .select("id")
         .eq("property_id", propertyId)
-        .eq("owner_user_id", ownerId)
-        .eq("created_by_user_id", user.id)
+        .or(`created_by_user_id.eq.${user.id},owner_user_id.eq.${user.id}`)
         .order("updated_at", { ascending: false })
         .limit(1);
 
