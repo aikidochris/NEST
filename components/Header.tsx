@@ -7,11 +7,32 @@ import { useAuth } from "@/app/AuthProvider";
 interface HeaderProps {
     onOpenMessages?: () => void;
     hasUnreadMessages?: boolean;
+    onSearch?: (query: string) => void;
 }
 
-export function Header({ onOpenMessages, hasUnreadMessages = false }: HeaderProps) {
+export function Header({ onOpenMessages, hasUnreadMessages = false, onSearch }: HeaderProps) {
     const { user, signOut } = useAuth();
     const [searchQuery, setSearchQuery] = useState("");
+    const searchInputRef = React.useRef<HTMLInputElement>(null);
+
+    // Global keyboard shortcut: COMMAND+K or CTRL+K
+    React.useEffect(() => {
+        const handleKeyDown = (e: KeyboardEvent) => {
+            if ((e.metaKey || e.ctrlKey) && e.key === "k") {
+                e.preventDefault();
+                searchInputRef.current?.focus();
+            }
+        };
+        window.addEventListener("keydown", handleKeyDown);
+        return () => window.removeEventListener("keydown", handleKeyDown);
+    }, []);
+
+    const handleSearchSubmit = (e: React.FormEvent) => {
+        e.preventDefault();
+        if (searchQuery.trim() && onSearch) {
+            onSearch(searchQuery.trim());
+        }
+    };
 
     return (
         <header className="fixed top-0 left-0 right-0 z-[100] h-16 bg-[#F9F7F4]/80 backdrop-blur-[24px] border-b border-[#1B1B1B]/10 flex items-center justify-between px-6 transition-all duration-300">
@@ -30,13 +51,14 @@ export function Header({ onOpenMessages, hasUnreadMessages = false }: HeaderProp
 
             {/* Center: Unified Search */}
             <div className="flex-1 max-w-[480px] px-4 flex justify-center">
-                <div className="relative w-full group">
+                <form onSubmit={handleSearchSubmit} className="relative w-full group">
                     <div className="absolute inset-y-0 left-3.5 flex items-center pointer-events-none">
                         <svg className="w-4 h-4 text-ink/30 group-focus-within:text-ink/60 transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
                         </svg>
                     </div>
                     <input
+                        ref={searchInputRef}
                         type="text"
                         value={searchQuery}
                         onChange={(e) => setSearchQuery(e.target.value)}
@@ -48,7 +70,7 @@ export function Header({ onOpenMessages, hasUnreadMessages = false }: HeaderProp
                             <span className="text-xs mr-0.5">⌘</span>K
                         </kbd>
                     </div>
-                </div>
+                </form>
             </div>
 
             {/* Right: Utility HUD */}

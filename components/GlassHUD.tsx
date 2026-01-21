@@ -16,6 +16,7 @@ interface GlassHUDProps {
     isTrayExpanded: boolean;
     setIsTrayExpanded: (expanded: boolean) => void;
     isMobile?: boolean;
+    zoom?: number;
 }
 
 export function GlassHUD({
@@ -30,7 +31,8 @@ export function GlassHUD({
     currentVibeZone,
     isTrayExpanded,
     setIsTrayExpanded,
-    isMobile = false
+    isMobile = false,
+    zoom = 14
 }: GlassHUDProps) {
 
     const [isPulsing, setIsPulsing] = React.useState(false);
@@ -153,7 +155,13 @@ export function GlassHUD({
             {/* Wrapper handles positioning (Layout) */}
             {/* Inner div handles visual/scale (Animation) */}
             {/* ================================================================== */}
-            <div className="absolute bottom-24 left-1/2 -translate-x-1/2 z-50 flex justify-center pointer-events-none">
+            <div
+                className={`absolute bottom-24 left-1/2 -translate-x-1/2 z-50 flex justify-center pointer-events-none transition-opacity duration-700`}
+                style={{
+                    opacity: Math.max(0, Math.min(1, (zoom - 12) / 1.5)),
+                    visibility: zoom < 12 ? 'hidden' : 'visible'
+                }}
+            >
                 <div
                     className={`
                         pointer-events-auto cursor-pointer
@@ -161,7 +169,7 @@ export function GlassHUD({
                         ${isTrayExpanded
                             ? "w-[400px] max-w-[95vw] rounded-3xl shadow-2xl"
                             : "min-w-[280px] max-w-[85vw] rounded-full shadow-xl hover:shadow-2xl hover:scale-[1.02]"}
-                        ${currentVibeZone ? "opacity-100 translate-y-0" : "opacity-0 translate-y-4 pointer-events-none"}
+                        ${currentVibeZone && zoom >= 12 ? "opacity-100 translate-y-0" : "opacity-0 translate-y-4 pointer-events-none"}
                     `}
                     style={{
                         backgroundColor: currentVibeZone
