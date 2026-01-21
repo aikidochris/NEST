@@ -256,7 +256,11 @@ export function PropertyProfileModal({
                 const convs = await listConversationsForProperty(property.property_id);
                 if (!cancelled && convs.length > 0) {
                     setHasConversations(true);
-                    // DO NOT auto-open inbox - only set flag for display purposes
+                    // Proactively show inbox summary, but don't force full panel yet
+                    // unless initialOpenMode was 'messages'
+                    if (initialOpenMode === "messages") {
+                        setShowOwnerInbox(true);
+                    }
                 }
             } catch (err) {
                 if (isInspectOn()) {
@@ -711,6 +715,24 @@ export function PropertyProfileModal({
                                         onNoteReply?.(conversationId);
                                     }}
                                 />
+
+                                {property.is_mine && !showOwnerInbox && hasConversations && (
+                                    <OwnerInboxPreview
+                                        propertyId={property.property_id}
+                                        onSelectConversation={(id) => {
+                                            setSelectedOwnerConversationId(id);
+                                            setOwnerPanelMode("thread");
+                                            setOwnerEntryPoint("row");
+                                            setShowOwnerInbox(true);
+                                        }}
+                                        onViewAll={() => {
+                                            setSelectedOwnerConversationId(null);
+                                            setOwnerPanelMode("list");
+                                            setOwnerEntryPoint("viewall");
+                                            setShowOwnerInbox(true);
+                                        }}
+                                    />
+                                )}
 
                                 {property.is_mine && showOwnerInbox && (
                                     <div className="border border-gray-100 bg-white/50 backdrop-blur-sm rounded-2xl overflow-hidden h-[450px] shadow-sm">
