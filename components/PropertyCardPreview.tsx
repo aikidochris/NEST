@@ -115,18 +115,18 @@ export function PropertyCardPreview({
             <div className="fixed inset-0 z-50 pointer-events-none">
                 {/* Backdrop */}
                 <div
-                    className="absolute inset-0 bg-black/20 pointer-events-auto"
+                    className="absolute inset-0 bg-black/40 backdrop-blur-[8px] pointer-events-auto transition-all duration-500"
                     onClick={onClose}
                 />
                 {/* Bottom sheet */}
-                <div className="absolute bottom-0 left-0 right-0 bg-white dark:bg-gray-900 rounded-t-2xl shadow-2xl pointer-events-auto max-h-[85vh] overflow-hidden">
+                <div className="absolute bottom-0 left-0 right-0 bg-white dark:bg-gray-900 rounded-t-2xl shadow-2xl pointer-events-auto max-h-[85dvh] overflow-hidden">
                     {/* Drag handle */}
                     <div className="flex justify-center py-3">
                         <div className="w-10 h-1 bg-gray-300 dark:bg-gray-600 rounded-full" />
                     </div>
 
                     {/* Content */}
-                    <div className="overflow-y-auto max-h-[calc(85vh-48px)]">
+                    <div className="overflow-y-auto overscroll-contain no-scrollbar max-h-[calc(85dvh-48px)] pb-12">
                         {/* Hero image */}
                         <PropertyImage
                             src={property.cover_image_url}
@@ -143,9 +143,12 @@ export function PropertyCardPreview({
                             </h2>
 
                             {/* Story preview */}
-                            <p className="text-gray-600 dark:text-gray-400 text-sm leading-relaxed mb-4 line-clamp-4">
-                                {storyPreview}
-                            </p>
+                            <div className="relative mb-6">
+                                <span className="absolute -top-3 -left-1 text-4xl text-orange-200/40 font-serif leading-none italic select-none">“</span>
+                                <p className="text-gray-600 dark:text-gray-400 text-base leading-relaxed line-clamp-6 pl-4 border-l border-orange-100/50">
+                                    {storyPreview}
+                                </p>
+                            </div>
 
                             {/* Intent chips */}
                             {intentStatuses.length > 0 && (
@@ -205,7 +208,7 @@ export function PropertyCardPreview({
                             {/* Primary CTA */}
                             <button
                                 onClick={onViewHome}
-                                className="w-full py-2.5 px-4 bg-gray-900 dark:bg-white text-white dark:text-gray-900 text-sm font-medium rounded-lg hover:bg-gray-800 dark:hover:bg-gray-100 transition-colors"
+                                className="w-full py-4 px-4 bg-gray-900 dark:bg-white text-white dark:text-gray-900 text-sm font-bold uppercase tracking-widest rounded-xl hover:bg-gray-800 dark:hover:bg-gray-100 transition-colors active:scale-[0.98]"
                             >
                                 View home
                             </button>

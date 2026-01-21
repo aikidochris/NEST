@@ -139,7 +139,7 @@ export function NeighbourSuggestModal({
                                             </span>
                                         </div>
                                     </div>
-                                    <span className="flex-shrink-0 px-3 py-1.5 text-xs font-medium text-ember bg-ember/10 hover:bg-ember/20 rounded-lg transition-colors">
+                                    <span className="flex-shrink-0 px-3 py-3 text-xs font-medium text-ember bg-ember/10 hover:bg-ember/20 rounded-lg transition-colors">
                                         Message
                                     </span>
                                 </button>
@@ -152,7 +152,7 @@ export function NeighbourSuggestModal({
                 <div className="px-4 py-3 border-t border-gray-100">
                     <button
                         onClick={onClose}
-                        className="w-full py-2.5 text-sm text-gray-600 hover:text-gray-900 transition-colors"
+                        className="w-full py-4 text-sm text-gray-600 hover:text-gray-900 transition-colors"
                     >
                         Maybe later
                     </button>

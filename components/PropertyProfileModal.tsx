@@ -457,7 +457,7 @@ export function PropertyProfileModal({
                     animate={{ opacity: 1, scale: 1 }}
                     exit={{ opacity: 0, scale: 0.95 }}
                     transition={{ type: "spring", stiffness: 300, damping: 25 }}
-                    className="relative rounded-[32px] shadow-2xl w-full max-w-2xl max-h-[calc(100vh-6rem)] overflow-hidden flex flex-col bg-white/80 backdrop-blur-xl border border-white/40"
+                    className="relative rounded-[32px] shadow-2xl w-full max-w-2xl max-h-[calc(100dvh-4rem)] md:max-h-[calc(100dvh-6rem)] overflow-hidden flex flex-col bg-white/80 backdrop-blur-xl border border-white/40"
                     role="dialog"
                     aria-modal="true"
                     aria-labelledby="profile-modal-title"
@@ -515,7 +515,7 @@ export function PropertyProfileModal({
                     </div>
 
                     {/* Scrollable Content */}
-                    <div className="flex-1 overflow-y-auto no-scrollbar">
+                    <div className="flex-1 overflow-y-auto overscroll-contain no-scrollbar">
                         <div className="px-6 py-6 pb-24">
                             {/* Header Info */}
                             <div className="mb-8">
@@ -571,9 +571,9 @@ export function PropertyProfileModal({
                             </div>
 
                             {/* Story Section: Emotional Core (Redesigned) */}
-                            <div className="mb-12 relative">
+                            <div className="mb-12 relative touch-pan-y">
                                 <div className="absolute -top-6 -left-2 text-6xl text-orange-200/50 font-serif leading-none italic select-none">“</div>
-                                <div className="bg-orange-50/40 backdrop-blur-md border border-orange-100/50 rounded-[24px] p-8 shadow-inner shadow-orange-900/5 relative overflow-hidden">
+                                <div className="bg-orange-50/40 backdrop-blur-md border border-orange-100/50 rounded-[24px] p-6 md:p-8 shadow-inner shadow-orange-900/5 relative overflow-hidden">
                                     <div className="flex items-center justify-between mb-6">
                                         <div className="flex flex-col">
                                             <h3 className="text-sm font-bold tracking-[0.2em] uppercase text-orange-300">The Story</h3>
