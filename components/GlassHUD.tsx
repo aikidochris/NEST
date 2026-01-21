@@ -15,6 +15,8 @@ interface GlassHUDProps {
     currentVibeZone: import("@/lib/vibeZones").VibeZone | null;
     isTrayExpanded: boolean;
     setIsTrayExpanded: (expanded: boolean) => void;
+    isMobile?: boolean;
+    zoom?: number;
 }
 
 export function GlassHUD({
@@ -28,7 +30,9 @@ export function GlassHUD({
     isPitchActive,
     currentVibeZone,
     isTrayExpanded,
-    setIsTrayExpanded
+    setIsTrayExpanded,
+    isMobile = false,
+    zoom = 14
 }: GlassHUDProps) {
 
     const [isPulsing, setIsPulsing] = React.useState(false);
@@ -63,16 +67,16 @@ export function GlassHUD({
     }, [currentVibeZone?.id]);
 
     // Common button style
-    const btnBase = "w-10 h-10 rounded-full flex items-center justify-center transition-all duration-300 hover:scale-110 active:scale-95 backdrop-blur-xl border shadow-lg pointer-events-auto";
+    const btnBase = "w-11 h-11 rounded-full flex items-center justify-center transition-all duration-300 hover:scale-110 active:scale-95 backdrop-blur-xl border shadow-lg pointer-events-auto";
     const btnActive = "border-[#E08E5F] bg-white shadow-[0_0_15px_rgba(224,142,95,0.4)]";
-    const btnInactive = "border-white/20 bg-white/70 hover:bg-white/90";
+    const btnInactive = "border-white/20 bg-white/70 hover:bg-white/90 text-ink/60";
 
     return (
         <>
             {/* ================================================================== */}
             {/* LEFT CONTROL CLUSTER: View Modes */}
             {/* ================================================================== */}
-            <div className="absolute bottom-24 left-6 z-50 flex flex-col gap-3 pointer-events-none">
+            <div className={`absolute ${isMobile ? 'bottom-44' : 'bottom-24'} left-6 z-50 flex flex-col gap-3 pointer-events-none`}>
                 {/* Paper View */}
                 <button
                     onClick={() => setViewMode("paper")}
@@ -100,7 +104,7 @@ export function GlassHUD({
             {/* ================================================================== */}
             {/* RIGHT CONTROL CLUSTER: Navigation & 3D */}
             {/* ================================================================== */}
-            <div className="absolute bottom-24 right-6 z-50 flex flex-col gap-3 pointer-events-none">
+            <div className={`absolute ${isMobile ? 'bottom-44' : 'bottom-24'} right-6 z-50 flex flex-col gap-3 pointer-events-none`}>
                 {/* 3D Toggle */}
                 <button
                     onClick={() => setIs3D(!is3D)}
@@ -151,15 +155,21 @@ export function GlassHUD({
             {/* Wrapper handles positioning (Layout) */}
             {/* Inner div handles visual/scale (Animation) */}
             {/* ================================================================== */}
-            <div className="absolute bottom-24 left-1/2 -translate-x-1/2 z-50 flex justify-center pointer-events-none">
+            <div
+                className={`absolute bottom-24 left-1/2 -translate-x-1/2 z-50 flex justify-center pointer-events-none transition-opacity duration-700`}
+                style={{
+                    opacity: Math.max(0, Math.min(1, (zoom - 12) / 1.5)),
+                    visibility: zoom < 12 ? 'hidden' : 'visible'
+                }}
+            >
                 <div
                     className={`
                         pointer-events-auto cursor-pointer
                         transition-all duration-500 ease-[0.19,1,0.22,1] origin-bottom
                         ${isTrayExpanded
-                            ? "w-[400px] rounded-3xl shadow-2xl"
-                            : "min-w-[280px] rounded-full shadow-xl hover:shadow-2xl hover:scale-[1.02]"}
-                        ${currentVibeZone ? "opacity-100 translate-y-0" : "opacity-0 translate-y-4 pointer-events-none"}
+                            ? "w-[400px] max-w-[95vw] rounded-3xl shadow-2xl"
+                            : "min-w-[280px] max-w-[85vw] rounded-full shadow-xl hover:shadow-2xl hover:scale-[1.02]"}
+                        ${currentVibeZone && zoom >= 12 ? "opacity-100 translate-y-0" : "opacity-0 translate-y-4 pointer-events-none"}
                     `}
                     style={{
                         backgroundColor: currentVibeZone

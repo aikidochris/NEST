@@ -134,6 +134,7 @@ const QUERYABLE_POINT_LAYERS = ["property-points"];
 export interface PropertyMapRef {
     refreshMapPins: () => Promise<void>;
     openMessageCentre: () => void;
+    handleSearch: (query: string) => Promise<void>;
 }
 
 const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
@@ -248,7 +249,50 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
         refreshMapPins: async () => {
             mapRef.current?.getMap().triggerRepaint();
         },
-        openMessageCentre: () => setShowMessageCentre(true)
+        openMessageCentre: () => {
+            setShowMessageCentre(true);
+        },
+        handleSearch: async (query: string) => {
+            if (!query) return;
+
+            // 1. Local Neighborhood Match
+            const lowerQuery = query.toLowerCase();
+            const localMatch = VIBE_ZONES.find(z =>
+                z.name.toLowerCase().includes(lowerQuery) ||
+                z.punchline.toLowerCase().includes(lowerQuery)
+            );
+
+            if (localMatch) {
+                inspectLog("SEARCH_LOCAL_MATCH", { query, neighborhood: localMatch.name });
+                mapRef.current?.getMap().easeTo({
+                    center: [localMatch.centroid[1], localMatch.centroid[0]],
+                    zoom: 15,
+                    duration: 2000
+                });
+                return;
+            }
+
+            // 2. Global Geocoding Fallback (Photon)
+            try {
+                inspectLog("SEARCH_GEOCODE_ATTEMPT", { query });
+                const response = await fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(query)}&limit=1`);
+                const data = await response.json();
+                if (data.features && data.features.length > 0) {
+                    const [lon, lat] = data.features[0].geometry.coordinates;
+                    inspectLog("SEARCH_GEOCODE_SUCCESS", { query, lat, lon });
+                    mapRef.current?.getMap().easeTo({
+                        center: [lon, lat],
+                        zoom: 17,
+                        duration: 2500
+                    });
+                } else {
+                    inspectLog("SEARCH_NO_RESULTS", { query });
+                }
+            } catch (err) {
+                console.error("[Search] Geocoding failed:", err);
+                inspectLog("SEARCH_ERROR", { query, error: String(err) });
+            }
+        }
     }));
 
     // Fetch vibe stats for area
@@ -600,8 +644,25 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
             // Remove and re-add to pick up correct viewMode styling
             remove3DBuildings(map);
             add3DBuildings(map, true);
+
+            // Mobile-specific auto-tilt for discoverability
+            if (isMobile) {
+                map.easeTo({
+                    pitch: 62,
+                    duration: 1200,
+                    essential: true
+                });
+            }
         } else {
             remove3DBuildings(map);
+            // Return to birds-eye view on mobile
+            if (isMobile) {
+                map.easeTo({
+                    pitch: 0,
+                    duration: 1000,
+                    essential: true
+                });
+            }
         }
     }, [is3D, viewMode, add3DBuildings, remove3DBuildings]);
 
@@ -730,8 +791,16 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
                         onMoveEnd={handleMoveEnd}
                         onLoad={handleLoad}
                         onClick={handleMapClick}
-                        style={{ width: "100%", height: "100%", transition: "filter 0.5s cubic-bezier(0.19, 1, 0.22, 1)", filter: isTrayExpanded ? "blur(12px) brightness(0.6)" : "none", pointerEvents: "auto" }}
+                        style={{
+                            width: "100%",
+                            height: "100%",
+                            transition: "filter 0.5s cubic-bezier(0.19, 1, 0.22, 1)",
+                            filter: isTrayExpanded ? "blur(12px) brightness(0.6)" : (isMobile && !!selectedPropertyId) ? "blur(12px) brightness(0.8)" : "none",
+                            pointerEvents: "auto"
+                        }}
                         mapStyle={MAP_STYLE}
+                        // @ts-ignore - antialias is a valid MapLibre constructor option but might be missing in react-map-gl types
+                        antialias={true}
                         attributionControl={false}
                         reuseMaps
                         interactiveLayerIds={["hearth-pins", "anchor-icons", "property-points"]}
@@ -741,13 +810,31 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
                                 <Layer id="satellite-layer" type="raster" paint={{ "raster-brightness-min": 0.05, "raster-contrast": 0.1, "raster-saturation": 0 }} />
                             </Source>
                         )}
-                        <Source id="luminary-mvt" type="vector" tiles={[`${getTileUrl()}?v=${tileVersion}`]} key={`mvt-${tileVersion}`}>
-                            <Layer id="discovery-heatmap" type="heatmap" source-layer="properties" maxzoom={12} paint={{ "heatmap-weight": ["get", "discovery_weight"], "heatmap-intensity": ["interpolate", ["linear"], ["zoom"], 0, 0.5, 11, 3], "heatmap-color": ["interpolate", ["linear"], ["heatmap-density"], 0, "rgba(255,255,255,0)", 0.1, "rgba(140,140,140,0.15)", 0.8, "rgba(224,142,95,0.8)", 1, "rgba(224,142,95,0.8)"], "heatmap-radius": ["interpolate", ["linear"], ["zoom"], 0, 2, 11, 15], "heatmap-opacity": ["interpolate", ["linear"], ["zoom"], 10, 1, 12, 0] }} />
+                        <Source id="luminary-mvt" type="vector" tiles={[`${getTileUrl()}?v=${tileVersion}`]} key={`mvt-${tileVersion}`} minzoom={11} maxzoom={14}>
+                            <Layer
+                                id="discovery-heatmap"
+                                type="heatmap"
+                                source-layer="properties"
+                                maxzoom={16}
+                                filter={['>', ['get', 'heat_weight'], 0]}
+                                paint={{
+                                    "heatmap-weight": ["get", "heat_weight"],
+                                    "heatmap-intensity": ["interpolate", ["linear"], ["zoom"], 0, 1, 11, 3],
+                                    "heatmap-color": [
+                                        "interpolate", ["linear"], ["heatmap-density"],
+                                        0, "rgba(0,0,0,0)",
+                                        0.5, "rgba(255, 87, 51, 0.4)",
+                                        1, "rgba(255, 215, 0, 0.7)"
+                                    ],
+                                    "heatmap-radius": ["interpolate", ["linear"], ["zoom"], 9, 10, 14, 40],
+                                    "heatmap-opacity": ["interpolate", ["linear"], ["zoom"], 11, 1, 15, 0]
+                                }}
+                            />
                             <Layer id="building-glow" type="circle" source-layer="properties" minzoom={11} filter={activeStatusFilters.length === 0 ? ['==', ['get', 'property_id'], 'NONE'] : ['all', ['in', ['get', 'status'], ['literal', activeStatusFilters]], ['==', ['get', 'has_active_intent'], true]]} paint={{ "circle-color": EMBER, "circle-opacity": 0, "circle-stroke-width": 4, "circle-stroke-color": EMBER, "circle-stroke-opacity": 0.4, "circle-radius": ["interpolate", ["linear"], ["zoom"], 15, 15, 17, 35, 19, 60], "circle-blur": 0.8 }} />
-                            <Layer id="hearth-pins" type="circle" source-layer="properties" minzoom={11} filter={activeStatusFilters.length === 0 ? ['==', ['get', 'property_id'], 'NONE'] : ['in', ['get', 'status'], ['literal', activeStatusFilters]]} layout={{ "circle-sort-key": ["match", ["get", "status"], "for_sale", 100, "open_to_talking", 90, "for_rent", 80, "settled", 50, 0] }} paint={{ "circle-color": ["match", ["get", "status"], "for_sale", EMBER, "for_rent", EMBER, "open_to_talking", EMBER, "settled", INK_GREY, "unclaimed", "#9CA3AF", "#9CA3AF"], "circle-radius": ["interpolate", ["linear"], ["zoom"], 11, 0, 12, ["match", ["get", "status"], "unclaimed", 2, "settled", 3, 6], 15, ["match", ["get", "status"], "unclaimed", 4, "settled", 6, 10]], "circle-opacity": ["interpolate", ["linear"], ["zoom"], 11, 0, 12, ["match", ["get", "status"], "unclaimed", 0.3, "settled", 0.6, 1]], "circle-stroke-width": 0 }} />
+                            <Layer id="hearth-pins" type="circle" source-layer="properties" minzoom={11} maxzoom={24} filter={activeStatusFilters.length === 0 ? ['==', ['get', 'property_id'], 'NONE'] : ['in', ['get', 'status'], ['literal', activeStatusFilters]]} layout={{ "circle-sort-key": ["match", ["get", "status"], "for_sale", 100, "open_to_talking", 90, "for_rent", 80, "settled", 50, 0] }} paint={{ "circle-color": ["match", ["get", "status"], "for_sale", EMBER, "for_rent", EMBER, "open_to_talking", EMBER, "settled", INK_GREY, "unclaimed", "#9CA3AF", "#9CA3AF"], "circle-radius": ["interpolate", ["linear"], ["zoom"], 12, 0, 14, ["match", ["get", "status"], "unclaimed", 4, "settled", 6, 10]], "circle-opacity": ["interpolate", ["linear"], ["zoom"], 12, 0, 14, ["match", ["get", "status"], "unclaimed", 0.3, "settled", 0.6, 1]], "circle-stroke-width": 0 }} />
                             <Layer id="hearth-pulse" type="circle" source-layer="properties" minzoom={11} filter={activeStatusFilters.length === 0 ? ['==', ['get', 'property_id'], 'NONE'] : ['all', ['in', ['get', 'status'], ['literal', activeStatusFilters]], ['==', ['get', 'has_active_intent'], true]]} paint={{ "circle-color": EMBER, "circle-radius": ["interpolate", ["linear"], ["zoom"], 12, ["*", 12, pulseRadius], 16, ["*", 28, pulseRadius]], "circle-opacity": ["*", 0.35, ["-", 1, pulseRadius]] }} />
                             <Layer id="hearth-glyphs" type="symbol" source-layer="properties" minzoom={13} filter={activeStatusFilters.length === 0 ? ['==', ['get', 'property_id'], 'NONE'] : ['in', ['get', 'status'], ['literal', activeStatusFilters]]} layout={{ "text-field": ["match", ["get", "status"], "for_sale", "£", "for_rent", "r", "open_to_talking", "+", ""], "text-font": ["Open Sans Bold"], "text-size": ["interpolate", ["linear"], ["zoom"], 14, 9, 16, 11], "text-allow-overlap": true, "text-ignore-placement": true }} paint={{ "text-color": "#ffffff" }} />
-                            <Layer id="property-points" type="circle" source-layer="properties" minzoom={11} filter={activeStatusFilters.length === 0 ? ['==', ['get', 'property_id'], 'NONE'] : ['in', ['get', 'status'], ['literal', activeStatusFilters]]} paint={{ "circle-color": "#000000", "circle-radius": 8, "circle-opacity": 0, "circle-stroke-opacity": 0 }} />
+                            <Layer id="property-points" type="circle" source-layer="properties" minzoom={11} filter={activeStatusFilters.length === 0 ? ['==', ['get', 'property_id'], 'NONE'] : ['in', ['get', 'status'], ['literal', activeStatusFilters]]} paint={{ "circle-color": "#000000", "circle-radius": isMobile ? 24 : 12, "circle-opacity": 0, "circle-stroke-opacity": 0 }} />
                         </Source>
                         {anchorData.features.length > 0 && (
                             <Source id="anchor-source" type="geojson" data={anchorData}>
@@ -763,50 +850,62 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
                 </div>
 
                 {/* Floating Map Filter Bar */}
-                <div className={`absolute top-4 left-1/2 -translate-x-1/2 z-20 transition-all duration-700 ease-out transform pointer-events-none ${isFilterMounted ? 'translate-y-0 opacity-100' : '-translate-y-8 opacity-0'}`}>
+                <div className={`absolute top-4 left-1/2 -translate-x-1/2 z-20 transition-all duration-700 ease-out transform pointer-events-none ${isFilterMounted && (!isMobile || !selectedPropertyId) ? 'translate-y-0 opacity-100' : '-translate-y-12 opacity-0'}`}>
                     <div className="flex flex-col items-center gap-2">
-                        <div className="flex items-center bg-[#F9F7F2]/95 backdrop-blur-[24px] border border-[#1B1B1B]/10 rounded-full px-2 py-2 shadow-[0_10px_40px_-15px_rgba(0,0,0,0.1)] pointer-events-auto">
-                            <button onClick={() => setIsFilterMobileExpanded(!isFilterMobileExpanded)} className="md:hidden flex items-center gap-2 px-4 py-1.5 rounded-full text-xs font-bold uppercase tracking-widest text-gray-500 hover:bg-gray-100/50">
-                                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" /></svg>
-                                <span>Filter</span>
-                            </button>
-                            <div className={`${isFilterMobileExpanded ? 'flex flex-col' : 'hidden'} md:flex items-center gap-1.5 px-1`}>
-                                <button onClick={() => toggleStatusFilter('for_sale')} className={`px-4 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-[0.2em] transition-all duration-300 transform active:scale-95 ${activeStatusFilters.includes('for_sale') ? 'bg-[#E08E5F] text-white shadow-[0_0_15px_rgba(224,142,95,0.5)]' : 'bg-white/40 text-gray-400 hover:bg-white/70'}`}>For Sale</button>
-                                <button onClick={() => toggleStatusFilter('for_rent')} className={`px-4 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-[0.2em] transition-all duration-300 transform active:scale-95 ${activeStatusFilters.includes('for_rent') ? 'bg-[#8C8C8C] text-white shadow-[0_0_15px_rgba(140,140,140,0.5)]' : 'bg-white/40 text-gray-400 hover:bg-white/70'}`}>For Rent</button>
-                                <button onClick={() => toggleStatusFilter('open_to_talking')} className={`relative px-4 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-[0.2em] transition-all duration-500 transform active:scale-95 overflow-hidden ${activeStatusFilters.includes('open_to_talking') ? 'bg-white text-[#E08E5F] shadow-[0_0_20px_rgba(224,142,95,0.4)] ring-1 ring-[#E08E5F]/20' : 'bg-white/40 text-gray-400 hover:bg-white/70'}`}>
+                        <div className={`flex items-center bg-[#F9F7F2]/95 backdrop-blur-[24px] border border-[#1B1B1B]/10 rounded-full p-1.5 shadow-[0_10px_40px_-15px_rgba(0,0,0,0.15)] pointer-events-auto transition-all duration-500 ease-in-out ${isMobile ? (isFilterMobileExpanded ? 'max-w-[92vw]' : 'w-[120px]') : 'w-auto md:w-max md:px-4'}`}>
+                            {isMobile && (
+                                <button
+                                    onClick={() => setIsFilterMobileExpanded(!isFilterMobileExpanded)}
+                                    className={`flex items-center gap-2 px-3 py-2.5 rounded-full text-[10px] font-bold uppercase tracking-widest transition-colors flex-shrink-0 ${isFilterMobileExpanded ? 'text-ember bg-ember/5' : 'text-gray-500 hover:bg-gray-100/50'}`}
+                                >
+                                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
+                                    </svg>
+                                    <span className={isFilterMobileExpanded ? "hidden sm:inline" : "inline"}>Filter</span>
+                                </button>
+                            )}
+
+                            <div className={`${!isMobile || isFilterMobileExpanded ? 'flex' : 'hidden'} items-center gap-2 md:gap-3 px-1 ${isMobile ? 'overflow-x-auto no-scrollbar' : ''}`}>
+                                <button onClick={() => toggleStatusFilter('for_sale')} className={`flex-shrink-0 px-4 py-2.5 rounded-full text-[10px] font-bold uppercase tracking-[0.2em] transition-all duration-300 transform active:scale-95 ${activeStatusFilters.includes('for_sale') ? 'bg-[#E08E5F] text-white shadow-lg shadow-orange-900/10' : 'bg-white/40 text-gray-400 hover:bg-white/70'}`}>For Sale</button>
+                                <button onClick={() => toggleStatusFilter('for_rent')} className={`flex-shrink-0 px-4 py-2.5 rounded-full text-[10px] font-bold uppercase tracking-[0.2em] transition-all duration-300 transform active:scale-95 ${activeStatusFilters.includes('for_rent') ? 'bg-[#8C8C8C] text-white shadow-md' : 'bg-white/40 text-gray-400 hover:bg-white/70'}`}>For Rent</button>
+                                <button onClick={() => toggleStatusFilter('open_to_talking')} className={`flex-shrink-0 relative px-4 py-2.5 rounded-full text-[10px] font-bold uppercase tracking-[0.2em] transition-all duration-500 transform active:scale-95 overflow-hidden ${activeStatusFilters.includes('open_to_talking') ? 'bg-white text-[#E08E5F] shadow-lg shadow-orange-900/10 ring-1 ring-[#E08E5F]/20' : 'bg-white/40 text-gray-400 hover:bg-white/70'}`}>
                                     {activeStatusFilters.includes('open_to_talking') && <span className="absolute inset-0 bg-[#E08E5F]/5 animate-pulse" />}
                                     <span className="relative z-10">Open to Talking</span>
                                 </button>
-                                <div className="w-px h-4 bg-gray-200/60 mx-1" />
-                                <button onClick={() => toggleStatusFilter('settled')} className={`px-4 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-[0.2em] transition-all duration-300 transform active:scale-95 ${activeStatusFilters.includes('settled') ? 'bg-[#4A4A4A] text-white shadow-md' : 'bg-white/40 text-gray-400 hover:bg-white/70'}`}>Settled</button>
-                                <button onClick={() => toggleStatusFilter('unclaimed')} className={`px-4 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-[0.2em] transition-all duration-300 transform active:scale-95 ${activeStatusFilters.includes('unclaimed') ? 'bg-[#D4D0C8] text-gray-700 shadow-md' : 'bg-white/40 text-gray-400 hover:bg-white/70'}`}>Unclaimed</button>
-                                <div className="w-px h-4 bg-gray-200/60 mx-1" />
-                                <button onClick={selectAllFilters} className="px-3 py-1.5 rounded-full text-[9px] font-bold uppercase tracking-widest text-gray-500 hover:bg-gray-100/50 transition-colors">All</button>
-                                <button onClick={clearStatusFilters} className="px-3 py-1.5 rounded-full text-[9px] font-bold uppercase tracking-widest text-[#E08E5F] hover:bg-[#E08E5F]/10 transition-colors">Clear</button>
+                                <div className="flex-shrink-0 w-px h-4 bg-gray-200/60 mx-1" />
+                                <button onClick={() => toggleStatusFilter('settled')} className={`flex-shrink-0 px-4 py-2.5 rounded-full text-[10px] font-bold uppercase tracking-[0.2em] transition-all duration-300 transform active:scale-95 ${activeStatusFilters.includes('settled') ? 'bg-[#4A4A4A] text-white shadow-md' : 'bg-white/40 text-gray-400 hover:bg-white/70'}`}>Settled</button>
+                                <button onClick={() => toggleStatusFilter('unclaimed')} className={`flex-shrink-0 px-4 py-2.5 rounded-full text-[10px] font-bold uppercase tracking-[0.2em] transition-all duration-300 transform active:scale-95 ${activeStatusFilters.includes('unclaimed') ? 'bg-[#D4D0C8] text-gray-700 shadow-md' : 'bg-white/40 text-gray-400 hover:bg-white/70'}`}>Unclaimed</button>
+                                <div className="flex-shrink-0 w-px h-4 bg-gray-200/60 mx-1" />
+                                <button onClick={selectAllFilters} className="flex-shrink-0 px-3 py-2.5 rounded-full text-[9px] font-bold uppercase tracking-widest text-gray-500 hover:bg-gray-100/50 transition-colors">All</button>
+                                <button onClick={clearStatusFilters} className="flex-shrink-0 px-4 py-2.5 rounded-full text-[9px] font-bold uppercase tracking-widest text-[#E08E5F] hover:bg-[#E08E5F]/10 transition-colors">Clear</button>
                             </div>
                         </div>
                     </div>
                 </div>
 
-                <GlassHUD
-                    viewMode={viewMode}
-                    setViewMode={(mode) => {
-                        setViewMode(mode);
-                        if (mode === "satellite") setIs3D(false);
-                    }}
-                    is3D={is3D}
-                    setIs3D={setIs3D}
-                    onResetOrientation={() => {
-                        const map = mapRef.current?.getMap();
-                        if (map) map.easeTo({ bearing: 0, pitch: 0, duration: 1000 });
-                    }}
-                    onZoomIn={() => mapRef.current?.getMap().zoomIn()}
-                    onZoomOut={() => mapRef.current?.getMap().zoomOut()}
-                    isPitchActive={isPitchActive}
-                    currentVibeZone={currentVibeZone}
-                    isTrayExpanded={isTrayExpanded}
-                    setIsTrayExpanded={setIsTrayExpanded}
-                />
+                <div className={`absolute inset-0 pointer-events-none z-30 transition-all duration-500 transform ${isMobile && !!selectedPropertyId ? 'opacity-0 scale-95 translate-y-4' : 'opacity-100 scale-100 translate-y-0'}`}>
+                    <GlassHUD
+                        viewMode={viewMode}
+                        setViewMode={(mode) => {
+                            setViewMode(mode);
+                            if (mode === "satellite") setIs3D(false);
+                        }}
+                        is3D={is3D}
+                        setIs3D={setIs3D}
+                        onResetOrientation={() => {
+                            const map = mapRef.current?.getMap();
+                            if (map) map.easeTo({ bearing: 0, pitch: 0, duration: 1000 });
+                        }}
+                        onZoomIn={() => mapRef.current?.getMap().zoomIn()}
+                        onZoomOut={() => mapRef.current?.getMap().zoomOut()}
+                        isPitchActive={isPitchActive}
+                        currentVibeZone={currentVibeZone}
+                        isTrayExpanded={isTrayExpanded}
+                        setIsTrayExpanded={setIsTrayExpanded}
+                        isMobile={isMobile}
+                        zoom={viewState.zoom}
+                    />
+                </div>
 
                 {selectedPropertyId && (
                     <PropertyCardSheet
