@@ -2,6 +2,14 @@
 
 import React from "react";
 import { getVibeAssetUrl } from "@/lib/vibeZones";
+import { Tooltip } from "./Tooltip";
+import { VibeCardImage } from "./VibeCardImage";
+
+// =============================================================================
+// ZONE C: UTILITY CLUSTER (Bottom-Right)
+// FIXED positioning with viewport constraints to prevent overflow
+// Stacking Order: Compass → Zoom → Sat/3D Toggle
+// =============================================================================
 
 interface GlassHUDProps {
     viewMode: "paper" | "satellite";
@@ -17,6 +25,9 @@ interface GlassHUDProps {
     setIsTrayExpanded: (expanded: boolean) => void;
     isMobile?: boolean;
     zoom?: number;
+    selectedPropertyId: string | null;
+    heatmapLens: 'pulse' | 'watching' | 'ready' | 'stories';
+    setHeatmapLens: (lens: 'pulse' | 'watching' | 'ready' | 'stories') => void;
 }
 
 export function GlassHUD({
@@ -32,317 +43,378 @@ export function GlassHUD({
     isTrayExpanded,
     setIsTrayExpanded,
     isMobile = false,
-    zoom = 14
+    zoom = 14,
+    selectedPropertyId,
+    heatmapLens,
+    setHeatmapLens
 }: GlassHUDProps) {
 
-    const [isPulsing, setIsPulsing] = React.useState(false);
-    const [isImageLoaded, setIsImageLoaded] = React.useState(false);
-    const [imageLoadError, setImageLoadError] = React.useState(false);
-    const [showSkeleton, setShowSkeleton] = React.useState(false);
+    // Zoom Band Logic for Auto-Collapse
+    const lastBandRef = React.useRef<number>(1);
 
-    // Reset image load state when zone changes
     React.useEffect(() => {
-        setIsImageLoaded(false);
-        setImageLoadError(false);
-        setShowSkeleton(false);
-    }, [currentVibeZone?.id]);
+        let currentBand = 1;
+        if (zoom < 13) currentBand = 0;
+        else if (zoom >= 15) currentBand = 2;
+        else currentBand = 1;
 
-    // Luminous Skeleton fallback after 2 seconds
-    React.useEffect(() => {
-        if (isTrayExpanded && !isImageLoaded && !imageLoadError) {
-            const timer = setTimeout(() => {
-                setShowSkeleton(true);
-            }, 2000);
-            return () => clearTimeout(timer);
+        if (currentBand !== lastBandRef.current) {
+            setIsTrayExpanded(false);
+            lastBandRef.current = currentBand;
         }
-    }, [isTrayExpanded, isImageLoaded, imageLoadError]);
+    }, [zoom, setIsTrayExpanded]);
 
-    // Horizon Pulse Effect
-    React.useEffect(() => {
-        if (currentVibeZone?.id) {
-            setIsPulsing(true);
-            const timer = setTimeout(() => setIsPulsing(false), 500);
-            return () => clearTimeout(timer);
-        }
-    }, [currentVibeZone?.id]);
-
-    // Common button style
-    const btnBase = "w-11 h-11 rounded-full flex items-center justify-center transition-all duration-300 hover:scale-110 active:scale-95 backdrop-blur-xl border shadow-lg pointer-events-auto";
-    const btnActive = "border-[#E08E5F] bg-white shadow-[0_0_15px_rgba(224,142,95,0.4)]";
-    const btnInactive = "border-white/20 bg-white/70 hover:bg-white/90 text-ink/60";
+    // Editorial button styling - calm, contrast/weight for active states
+    const btnBase = "w-9 h-9 rounded-lg flex items-center justify-center transition-all duration-200 active:scale-95";
+    const btnActive = "bg-[#1B1B1B] text-white";
+    const btnInactive = "bg-white/80 text-[#6B6B6B] hover:bg-white hover:text-[#1B1B1B]";
 
     return (
         <>
             {/* ================================================================== */}
-            {/* LEFT CONTROL CLUSTER: View Modes */}
-            {/* ================================================================== */}
-            <div className={`absolute ${isMobile ? 'bottom-44' : 'bottom-24'} left-6 z-50 flex flex-col gap-3 pointer-events-none`}>
-                {/* Paper View */}
-                <button
-                    onClick={() => setViewMode("paper")}
-                    className={`${btnBase} ${viewMode === 'paper' ? btnActive : btnInactive}`}
-                    aria-label="Paper View"
-                >
-                    <svg className={`w-5 h-5 transition-colors ${viewMode === 'paper' ? 'text-[#E08E5F]' : 'text-ink/60'}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                        <path strokeLinecap="round" d="M3 3h18v18H3zM3 9h18M3 15h18M9 3v18M15 3v18" />
-                    </svg>
-                </button>
-
-                {/* Satellite View */}
-                <button
-                    onClick={() => setViewMode("satellite")}
-                    className={`${btnBase} ${viewMode === 'satellite' ? btnActive : btnInactive}`}
-                    aria-label="Satellite View"
-                >
-                    <svg className={`w-5 h-5 transition-colors ${viewMode === 'satellite' ? 'text-[#E08E5F]' : 'text-ink/60'}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M4 12c0-4 4-8 8-8s8 4 8 8-4 8-8 8-8-4-8-8z" />
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M12 4c2 2 2 6 0 8s-2 6 0 8M4 12c4 2 8 2 16 0" />
-                    </svg>
-                </button>
-            </div>
-
-            {/* ================================================================== */}
-            {/* RIGHT CONTROL CLUSTER: Navigation & 3D */}
-            {/* ================================================================== */}
-            <div className={`absolute ${isMobile ? 'bottom-44' : 'bottom-24'} right-6 z-50 flex flex-col gap-3 pointer-events-none`}>
-                {/* 3D Toggle */}
-                <button
-                    onClick={() => setIs3D(!is3D)}
-                    className={`${btnBase} ${is3D ? "border-[#E08E5F] bg-white shadow-[0_0_15px_rgba(224,142,95,0.5)]" : btnInactive}`}
-                    aria-label="Toggle 3D"
-                >
-                    <svg className={`w-5 h-5 transition-all duration-300 ${is3D ? "text-[#E08E5F] drop-shadow-[0_0_6px_rgba(224,142,95,0.6)]" : "text-ink/60"}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
-                    </svg>
-                </button>
-
-                {/* Zoom In */}
-                <button
-                    onClick={onZoomIn}
-                    className={`${btnBase} ${btnInactive} text-ink/70 hover:text-ink`}
-                    aria-label="Zoom In"
-                >
-                    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
-                    </svg>
-                </button>
-
-                {/* Zoom Out */}
-                <button
-                    onClick={onZoomOut}
-                    className={`${btnBase} ${btnInactive} text-ink/70 hover:text-ink`}
-                    aria-label="Zoom Out"
-                >
-                    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M18 12H6" />
-                    </svg>
-                </button>
-
-                {/* Compass */}
-                <button
-                    onClick={onResetOrientation}
-                    className={`${btnBase} ${isPitchActive ? "border-[#E08E5F]/50 bg-white/90 shadow-[0_0_12px_rgba(224,142,95,0.3)]" : btnInactive}`}
-                    aria-label="Reset Orientation"
-                >
-                    <svg className={`w-5 h-5 transition-colors ${isPitchActive ? 'text-[#E08E5F]' : 'text-ink/60'}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
-                    </svg>
-                </button>
-            </div>
-
-            {/* ================================================================== */}
-            {/* HORIZON ANCHOR - Default: Bottom-24, Centered */}
-            {/* Wrapper handles positioning (Layout) */}
-            {/* Inner div handles visual/scale (Animation) */}
+            {/* ZONE C: UTILITY CLUSTER (Bottom-Right) */}
+            {/* FIXED positioning with max-height constraint */}
+            {/* Responsive: reduced gaps on small viewports */}
             {/* ================================================================== */}
             <div
-                className={`absolute bottom-24 left-1/2 -translate-x-1/2 z-50 flex justify-center pointer-events-none transition-opacity duration-700`}
+                className="fixed z-50"
                 style={{
-                    opacity: Math.max(0, Math.min(1, (zoom - 12) / 1.5)),
-                    visibility: zoom < 12 ? 'hidden' : 'visible'
+                    right: '20px',
+                    bottom: isMobile ? '100px' : '80px',
+                    maxHeight: 'calc(100vh - 140px)',
+                    overflowY: 'auto',
+                    pointerEvents: 'auto'
                 }}
             >
-                <div
-                    className={`
-                        pointer-events-auto cursor-pointer
-                        transition-all duration-500 ease-[0.19,1,0.22,1] origin-bottom
-                        ${isTrayExpanded
-                            ? "w-[400px] max-w-[95vw] rounded-3xl shadow-2xl"
-                            : "min-w-[280px] max-w-[85vw] rounded-full shadow-xl hover:shadow-2xl hover:scale-[1.02]"}
-                        ${currentVibeZone && zoom >= 12 ? "opacity-100 translate-y-0" : "opacity-0 translate-y-4 pointer-events-none"}
-                    `}
-                    style={{
-                        backgroundColor: currentVibeZone
-                            ? `${currentVibeZone.themeColor}${isTrayExpanded ? 'F5' : 'CC'}`
-                            : "rgba(255,255,255,0.9)",
-                        backdropFilter: "blur(24px)",
-                        border: `1px solid ${currentVibeZone ? `${currentVibeZone.themeColor}40` : 'rgba(255,255,255,0.3)'}`,
-                        boxShadow: isPulsing
-                            ? `0 0 40px ${currentVibeZone?.themeColor}80`
-                            : isTrayExpanded
-                                ? "0 25px 50px -12px rgba(0, 0, 0, 0.25)"
-                                : "0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)",
-                        transform: isPulsing ? "scale(1.05)" : "scale(1)"
-                    }}
-                    onClick={() => !isTrayExpanded && setIsTrayExpanded(true)}
-                >
-                    {/* COLLAPSED STATE: Horizon Pill */}
-                    {!isTrayExpanded && (
-                        <div className="px-6 py-3 flex items-center justify-center gap-3">
-                            {/* Location Pin */}
-                            <div
-                                className="w-8 h-8 rounded-full flex items-center justify-center border border-white/40"
-                                style={{ backgroundColor: `${currentVibeZone?.themeColor}80` }}
-                            >
-                                <svg className="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
-                                </svg>
-                            </div>
+                <div className="flex flex-col gap-1 p-1.5 bg-white/90 backdrop-blur-[12px] border border-[#E5E5E5] rounded-xl shadow-sm">
 
-                            {/* Cross-fading Text */}
-                            <div className="flex flex-col items-center text-center">
-                                <span
-                                    key={currentVibeZone?.id || 'none'}
-                                    className="text-white font-bold text-base tracking-wide animate-in fade-in slide-in-from-bottom-1 duration-500 whitespace-nowrap"
-                                >
-                                    {currentVibeZone?.name || "Exploring..."}
-                                </span>
-                                <span className="text-white/80 text-[10px] font-semibold tracking-[0.2em] uppercase whitespace-nowrap">
-                                    {currentVibeZone?.punchline || ""}
-                                </span>
-                            </div>
-
-                            {/* Expand Chevron */}
-                            <svg className="w-5 h-5 text-white/70 ml-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
+                    {/* Compass / Orientation Reset */}
+                    <Tooltip content="Reset map orientation." side="left">
+                        <button
+                            onClick={onResetOrientation}
+                            className={`${btnBase} ${isPitchActive ? btnActive : btnInactive}`}
+                            aria-label="Reset Orientation"
+                        >
+                            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
                             </svg>
-                        </div>
-                    )}
+                        </button>
+                    </Tooltip>
 
-                    {/* EXPANDED STATE: Full Vibe Card */}
-                    {isTrayExpanded && currentVibeZone && (
-                        <div className="flex flex-col w-full overflow-hidden rounded-3xl animate-in fade-in zoom-in-95 duration-500">
-                            {/* Console Audit */}
-                            {(() => {
-                                console.log("Hearth Asset Request:", {
-                                    zone: currentVibeZone.id,
-                                    fullUrl: getVibeAssetUrl(currentVibeZone.assetKey)
-                                });
-                                return null;
-                            })()}
-                            {/* Hero Image */}
-                            <div className="relative w-full h-[180px] bg-black/20 overflow-hidden">
-                                {currentVibeZone.assetKey && !imageLoadError ? (
-                                    <div className="relative w-full h-full">
-                                        <img
-                                            src={getVibeAssetUrl(currentVibeZone.assetKey)}
-                                            alt={currentVibeZone.name}
-                                            loading="eager"
-                                            onLoad={() => setIsImageLoaded(true)}
-                                            onError={() => {
-                                                console.error("Hero image failed to load:", getVibeAssetUrl(currentVibeZone.assetKey));
-                                                setImageLoadError(true);
-                                                setIsImageLoaded(true); // Stop the loading state
-                                            }}
-                                            className={`
-                                                w-full h-full object-cover object-center transition-opacity duration-300
-                                                ${isImageLoaded ? "opacity-100" : "opacity-0"}
-                                            `}
-                                            style={{
-                                                WebkitMaskImage: "linear-gradient(to bottom, black 70%, transparent 100%)",
-                                                maskImage: "linear-gradient(to bottom, black 70%, transparent 100%)"
-                                            }}
-                                        />
-                                    </div>
-                                ) : (
-                                    <div
-                                        className="absolute inset-0 flex items-center justify-center"
-                                        style={{
-                                            background: showSkeleton || imageLoadError
-                                                ? `linear-gradient(135deg, ${currentVibeZone.themeColor}40 0%, ${currentVibeZone.themeColor}20 50%, ${currentVibeZone.themeColor}40 100%)`
-                                                : 'rgba(255,255,255,0.05)',
-                                            backdropFilter: 'blur(8px)'
-                                        }}
-                                    >
-                                        {!showSkeleton && !imageLoadError && (
-                                            <div className="flex flex-col items-center gap-2 animate-pulse">
-                                                <div className="w-8 h-8 rounded-full border-2 border-white/20 border-t-white/60 animate-spin" />
-                                            </div>
-                                        )}
-                                        {(showSkeleton || imageLoadError) && (
-                                            <div
-                                                className="absolute inset-0 animate-pulse"
-                                                style={{
-                                                    background: `linear-gradient(180deg, ${currentVibeZone.themeColor}60 0%, ${currentVibeZone.themeColor}30 100%)`
-                                                }}
-                                            />
-                                        )}
-                                    </div>
-                                )}
+                    {/* Divider */}
+                    <div className="w-full h-px bg-[#E5E5E5] my-0.5" />
 
-                                {/* Gradient Overlay - Softening the text area transition further */}
-                                <div className="absolute inset-x-0 bottom-0 h-1/2 bg-gradient-to-t from-black/20 to-transparent pointer-events-none" />
+                    {/* Zoom In */}
+                    <Tooltip content="Zoom in." side="left">
+                        <button
+                            onClick={onZoomIn}
+                            className={`${btnBase} ${btnInactive}`}
+                            aria-label="Zoom In"
+                        >
+                            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                            </svg>
+                        </button>
+                    </Tooltip>
 
-                                {/* VALUE BADGE - Top Right, Prominent */}
-                                <div className="absolute top-4 right-4 z-20 px-4 py-2 rounded-xl bg-white/95 backdrop-blur-md shadow-2xl border border-white/30 animate-in fade-in zoom-in duration-700 delay-200">
-                                    <span className="text-sm font-black tracking-wider text-[#E08E5F] uppercase">
-                                        {currentVibeZone.priceBand}
-                                    </span>
-                                </div>
+                    {/* Zoom Out */}
+                    <Tooltip content="Zoom out." side="left">
+                        <button
+                            onClick={onZoomOut}
+                            className={`${btnBase} ${btnInactive}`}
+                            aria-label="Zoom Out"
+                        >
+                            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M18 12H6" />
+                            </svg>
+                        </button>
+                    </Tooltip>
 
-                                {/* Close Button */}
-                                <button
-                                    className="absolute top-4 left-4 z-20 p-2.5 rounded-full bg-black/40 hover:bg-black/60 text-white/80 hover:text-white transition-all backdrop-blur-md active:scale-90"
-                                    onClick={(e) => {
-                                        e.stopPropagation();
-                                        setIsTrayExpanded(false);
-                                    }}
-                                >
-                                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" />
-                                    </svg>
-                                </button>
+                    {/* Divider */}
+                    <div className="w-full h-px bg-[#E5E5E5] my-0.5" />
 
-                                {/* Title Overlay */}
-                                <div className="absolute bottom-4 left-5 right-5">
-                                    <h3 className="text-white font-bold text-2xl tracking-tight drop-shadow-lg">
-                                        {currentVibeZone.name}
-                                    </h3>
-                                    <p className="text-white/80 text-xs font-semibold tracking-[0.2em] uppercase mt-1">
-                                        {currentVibeZone.punchline}
-                                    </p>
-                                </div>
-                            </div>
+                    {/* Satellite Toggle */}
+                    <Tooltip content={viewMode === 'satellite' ? "Switch to map view." : "Switch to satellite view."} side="left">
+                        <button
+                            onClick={() => setViewMode(viewMode === 'satellite' ? 'paper' : 'satellite')}
+                            className={`${btnBase} ${viewMode === 'satellite' ? btnActive : btnInactive}`}
+                            aria-label="Toggle Satellite"
+                        >
+                            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M4 12c0-4 4-8 8-8s8 4 8 8-4 8-8 8-8-4-8-8z" />
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M12 4c2 2 2 6 0 8s-2 6 0 8M4 12c4 2 8 2 16 0" />
+                            </svg>
+                        </button>
+                    </Tooltip>
 
-                            {/* Content Body */}
-                            <div className="p-5 pt-4">
-                                {/* Vibe Tags */}
-                                <div className="flex flex-wrap gap-2 mb-4">
-                                    {currentVibeZone.tags.map((tag) => (
-                                        <span
-                                            key={tag}
-                                            className="px-3 py-1 rounded-full text-[10px] font-bold tracking-wider uppercase shadow-sm"
-                                            style={{
-                                                backgroundColor: `${currentVibeZone.themeColor}40`,
-                                                color: 'rgba(255,255,255,0.95)',
-                                                border: `1px solid ${currentVibeZone.themeColor}60`
-                                            }}
-                                        >
-                                            {tag}
-                                        </span>
-                                    ))}
-                                </div>
-
-                                {/* Description */}
-                                <p className="text-white/90 text-sm leading-relaxed font-medium">
-                                    {currentVibeZone.description}
-                                </p>
-                            </div>
-                        </div>
-                    )}
+                    {/* 3D Toggle */}
+                    <Tooltip content="Switch to 3D view." side="left">
+                        <button
+                            onClick={() => setIs3D(!is3D)}
+                            className={`${btnBase} ${is3D ? btnActive : btnInactive}`}
+                            aria-label="Toggle 3D"
+                            title={is3D ? 'Disable 3D' : 'Enable 3D'}
+                        >
+                            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
+                            </svg>
+                        </button>
+                    </Tooltip>
                 </div>
             </div>
+
+            {/* ================================================================== */}
+            {/* ZONE B: AREA CONTEXT STRIP (Bottom-Left) */}
+            {/* Surface 1: Area name (passive) | Surface 2: Lens selector (interactive) */}
+            {/* ================================================================== */}
+            <div
+                className={`absolute z-50 flex flex-col gap-3 transition-all duration-300 ${isMobile && !!selectedPropertyId ? 'opacity-0 translate-y-8' : 'opacity-100 translate-y-0'}`}
+                style={{ left: '20px', bottom: '80px', pointerEvents: 'auto', maxWidth: '200px' }}
+            >
+                {/* Surface 1: Area Context Chip (Visible only when zoomed in to Neighbourhood/Local scale) */}
+                {/* Defines the spatial hierarchy: "You are in Monkseaton, inside North Tyneside" */}
+                <div
+                    className={`transition-all duration-500 ease-out flex items-center ${zoom >= 13
+                        ? 'opacity-100 translate-x-0'
+                        : 'opacity-0 -translate-x-4 pointer-events-none absolute'
+                        }`}
+                >
+                    <div className="bg-white/90 backdrop-blur-[12px] border border-[#E5E5E5] px-4 py-2 rounded-full shadow-sm cursor-default">
+                        <span className="text-[11px] font-bold uppercase tracking-widest text-gray-500">
+                            North Tyneside
+                        </span>
+                    </div>
+                </div>
+
+                {/* Surface 2: Lens Selector (Interactive - color-coded) */}
+                <div className="flex flex-col bg-white/90 backdrop-blur-[12px] border border-[#E5E5E5] rounded-xl shadow-sm overflow-hidden">
+                    <span className="px-4 pt-3 pb-2 text-[9px] font-bold uppercase tracking-[0.15em] text-[#999] border-b border-[#E5E5E5]">
+                        Lens
+                    </span>
+
+                    {/* Pulse (Early interest) - heat_weight */}
+                    <Tooltip content="A gentle pulse showing where people have been starting to look and interact lately." side="right">
+                        <button
+                            onClick={() => setHeatmapLens('pulse')}
+                            className={`px-4 py-2.5 text-left text-[13px] transition-all duration-200 flex items-center gap-2 ${heatmapLens === 'pulse'
+                                ? 'bg-[#E08E5F] text-white font-semibold'
+                                : 'text-[#4A4A4A] hover:bg-[#F5F5F5] active:bg-[#EBEBEB]'
+                                }`}
+                        >
+                            <span className={`w-2 h-2 rounded-full ${heatmapLens === 'pulse' ? 'bg-white' : 'bg-[#E08E5F]'}`} />
+                            Early interest
+                        </button>
+                    </Tooltip>
+
+                    {/* Watching (Being followed) - interest_weight */}
+                    <Tooltip content="Homes and streets that are attracting attention right now." side="right">
+                        <button
+                            onClick={() => setHeatmapLens('watching')}
+                            className={`px-4 py-2.5 text-left text-[13px] transition-all duration-200 flex items-center gap-2 ${heatmapLens === 'watching'
+                                ? 'bg-[#E08E5F] text-white font-semibold'
+                                : 'text-[#4A4A4A] hover:bg-[#F5F5F5] active:bg-[#EBEBEB]'
+                                }`}
+                        >
+                            <span className={`w-2 h-2 rounded-full ${heatmapLens === 'watching' ? 'bg-white' : 'bg-[#E08E5F]'}`} />
+                            Being followed
+                        </button>
+                    </Tooltip>
+
+                    {/* Ready (Open to talking) - readiness_weight */}
+                    <Tooltip content="Homes where owners are currently open to conversations, even if they’re not listed." side="right">
+                        <button
+                            onClick={() => setHeatmapLens('ready')}
+                            className={`px-4 py-2.5 text-left text-[13px] transition-all duration-200 flex items-center gap-2 ${heatmapLens === 'ready'
+                                ? 'bg-[#E08E5F] text-white font-semibold'
+                                : 'text-[#4A4A4A] hover:bg-[#F5F5F5] active:bg-[#EBEBEB]'
+                                }`}
+                        >
+                            <span className={`w-2 h-2 rounded-full ${heatmapLens === 'ready' ? 'bg-white' : 'bg-[#E08E5F]'}`} />
+                            Open to talking
+                        </button>
+                    </Tooltip>
+
+                    {/* Stories (Local stories) - activity_weight */}
+                    <Tooltip content="Places where people have been sharing updates about their home or street." side="right">
+                        <button
+                            onClick={() => setHeatmapLens('stories')}
+                            className={`px-4 py-2.5 pb-3 text-left text-[13px] transition-all duration-200 flex items-center gap-2 ${heatmapLens === 'stories'
+                                ? 'bg-[#E08E5F] text-white font-semibold'
+                                : 'text-[#4A4A4A] hover:bg-[#F5F5F5] active:bg-[#EBEBEB]'
+                                }`}
+                        >
+                            <span className={`w-2 h-2 rounded-full ${heatmapLens === 'stories' ? 'bg-white' : 'bg-[#E08E5F]'}`} />
+                            Local stories
+                        </button>
+                    </Tooltip>
+                </div>
+            </div>
+
+            {/* Mobile: Compact cluster */}
+            {isMobile && (
+                <div
+                    className="fixed z-50"
+                    style={{
+                        right: '12px',
+                        bottom: '100px',
+                        maxHeight: 'calc(100vh - 180px)',
+                        overflowY: 'auto',
+                        pointerEvents: 'auto'
+                    }}
+                >
+                    <div className="flex flex-col gap-0.5 p-1 bg-white/90 backdrop-blur-[12px] border border-[#E5E5E5] rounded-lg shadow-sm">
+                        <button
+                            onClick={onResetOrientation}
+                            className={`${btnBase} w-8 h-8 ${isPitchActive ? btnActive : btnInactive}`}
+                            aria-label="Reset Orientation"
+                        >
+                            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+                            </svg>
+                        </button>
+                        <button
+                            onClick={onZoomIn}
+                            className={`${btnBase} w-8 h-8 ${btnInactive}`}
+                            aria-label="Zoom In"
+                        >
+                            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                            </svg>
+                        </button>
+                        <button
+                            onClick={onZoomOut}
+                            className={`${btnBase} w-8 h-8 ${btnInactive}`}
+                            aria-label="Zoom Out"
+                        >
+                            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M18 12H6" />
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+            )}
+
+            {/* ================================================================== */}
+            {/* CENTER-BOTTOM VIBE PILL - Hero interaction for area context */}
+            {/* Clickable, themed, shows area name + descriptor + lens indicator */}
+            {/* SHOWS: Area Content (<13) OR Neighbourhood Content (>=13) */}
+            {/* ================================================================== */}
+            {currentVibeZone && zoom >= 11 && (
+                <div
+                    onClick={(e) => {
+                        e.stopPropagation();
+                        if (!isTrayExpanded) setIsTrayExpanded(true);
+                    }}
+                    className={`fixed z-50 left-1/2 -translate-x-1/2 shadow-2xl transition-all duration-500 ease-[cubic-bezier(0.32,0.72,0,1)] overflow-hidden pointer-events-auto ${isTrayExpanded
+                        ? 'w-[320px] max-h-[600px] rounded-3xl bg-white cursor-default'
+                        : 'w-auto max-h-[60px] rounded-full cursor-pointer hover:scale-[1.02] active:scale-[0.98]'
+                        }`}
+                    style={{
+                        bottom: isMobile ? '120px' : '100px',
+                        backgroundColor: isTrayExpanded ? '#ffffff' : (zoom < 13 ? '#4A7C59' : (currentVibeZone.themeColor || '#4A7C59')),
+                    }}
+                >
+                    {/* COLLAPSED STATE CONTENT */}
+                    <div className={`flex items-center gap-3 px-5 py-3 transition-opacity duration-300 ${isTrayExpanded ? 'opacity-0 absolute pointer-events-none' : 'opacity-100 delay-100'}`}>
+                        {/* Location pin icon */}
+                        <div className="w-7 h-7 rounded-full bg-white/20 flex items-center justify-center">
+                            <svg className="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+                            </svg>
+                        </div>
+
+                        {/* Area name + descriptor */}
+                        <div className="flex flex-col items-start text-left whitespace-nowrap">
+                            <span className="text-white font-semibold text-[14px] leading-tight">
+                                {zoom < 13 ? "North Tyneside" : currentVibeZone.name}
+                            </span>
+                            <span className="text-white/70 text-[11px] font-medium">
+                                {zoom < 13 ? "Coastal region" : currentVibeZone.punchline}
+                            </span>
+                        </div>
+
+                        {/* Chevron */}
+                        <svg className="w-4 h-4 text-white/60" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M5 15l7-7 7 7" />
+                        </svg>
+                    </div>
+
+                    {/* EXPANDED STATE CONTENT */}
+                    <div className={`flex flex-col w-full transition-all duration-500 ${isTrayExpanded ? 'opacity-100 translate-y-0 delay-150' : 'opacity-0 translate-y-4 absolute pointer-events-none'}`}>
+                        {/* Image Header */}
+                        <div className="relative h-40 w-full bg-gray-200 overflow-hidden">
+                            <VibeCardImage
+                                assetKey={zoom < 13 ? "Tynemouth Village" : currentVibeZone.assetKey}
+                                altText={zoom < 13 ? "North Tyneside" : currentVibeZone.name}
+                            />
+
+                            {/* Header Text Overlay */}
+                            <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent pointer-events-none" />
+                            <div className="absolute bottom-3 left-4 right-4 text-white z-10">
+                                {zoom < 13 ? (
+                                    // AREA VIEW (Low Zoom)
+                                    <>
+                                        <h3 className="font-bold text-lg leading-tight drop-shadow-sm">North Tyneside</h3>
+                                        <p className="text-xs font-medium text-white/90 drop-shadow-sm">Coastal, settled, quietly connected</p>
+                                    </>
+                                ) : (
+                                    // NEIGHBOURHOOD / LOCAL VIEW (Mid/High Zoom)
+                                    <>
+                                        <h3 className="font-bold text-lg leading-tight drop-shadow-sm">{currentVibeZone.name}</h3>
+                                        <p className="text-xs font-medium text-white/90 drop-shadow-sm">{currentVibeZone.punchline}</p>
+                                    </>
+                                )}
+                            </div>
+
+                            {/* Close Button */}
+                            <button
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    setIsTrayExpanded(false);
+                                }}
+                                className="absolute top-3 right-3 z-20 w-8 h-8 rounded-full bg-black/20 hover:bg-black/40 backdrop-blur-sm flex items-center justify-center transition-colors text-white"
+                            >
+                                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                                </svg>
+                            </button>
+                        </div>
+
+                        {/* Content Body */}
+                        <div className="p-4 flex flex-col gap-3">
+                            {zoom < 13 ? (
+                                // AREA VIEW CONTENT
+                                <p className="text-sm text-gray-600 leading-relaxed">
+                                    An established stretch of coastline and neighbourhoods where people tend to stay put.
+                                    Life here centres on schools, sea air, and familiar streets — calm, but never cut off.
+                                </p>
+                            ) : (
+                                // NEIGHBOURHOOD / LOCAL VIEW CONTENT
+                                <>
+                                    {/* Tags */}
+                                    <div className="flex flex-wrap gap-1.5">
+                                        {currentVibeZone.tags.slice(0, 3).map(tag => (
+                                            <span key={tag} className="px-2 py-1 bg-gray-50 text-gray-500 rounded-md text-[10px] uppercase tracking-wider font-bold border border-gray-100">
+                                                {tag}
+                                            </span>
+                                        ))}
+                                    </div>
+
+                                    <p className="text-sm text-gray-600 leading-relaxed">
+                                        {currentVibeZone.description}
+                                    </p>
+
+                                    <div className="flex items-center justify-between pt-3 border-t border-gray-100 mt-1">
+                                        <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Typical Price</span>
+                                        <span className="text-sm font-bold text-gray-900">{currentVibeZone.priceBand}</span>
+                                    </div>
+                                </>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            )}
         </>
     );
 }

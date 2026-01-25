@@ -1,5 +1,6 @@
 "use client";
 
+import { Tooltip } from "./Tooltip";
 import { useState, useCallback, useRef, useEffect, useImperativeHandle, forwardRef } from "react";
 import Map, { Source, Layer, ViewStateChangeEvent, MapRef } from "react-map-gl/maplibre";
 import type { MapLayerMouseEvent } from "maplibre-gl";
@@ -167,6 +168,10 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
     const [isTrayExpanded, setIsTrayExpanded] = useState(false);
     const [tileVersion, setTileVersion] = useState(0); // Cache-busting version for MVT tiles
 
+    // Signal Heatmap V4.1.2: Lens state for Discovery Hub
+    // Maps to MVT columns: heat_weight, interest_weight, readiness_weight, activity_weight
+    const [heatmapLens, setHeatmapLens] = useState<'pulse' | 'watching' | 'ready' | 'stories'>('pulse');
+
     const { accessToken, user } = useAuth();
     const clusterAbortRef = useRef<AbortController | null>(null);
     const vibeAbortRef = useRef<AbortController | null>(null);
@@ -240,6 +245,30 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
             map.once('style.load', applyFilters);
         }
     }, [activeStatusFilters]);
+
+    // Signal Heatmap V4.1.2: Smooth Lens Transition Effect
+    // Uses setPaintProperty for cross-fade when switching between signal weights
+    useEffect(() => {
+        const map = mapRef.current?.getMap();
+        if (!map || !map.isStyleLoaded()) return;
+
+        // Map lens selection to MVT column name
+        const weightColumn = heatmapLens === 'pulse' ? 'heat_weight' :
+            heatmapLens === 'watching' ? 'interest_weight' :
+                heatmapLens === 'ready' ? 'readiness_weight' :
+                    'activity_weight';
+
+        // Smooth transition: update the heatmap weight expression
+        if (map.getLayer('discovery-heatmap')) {
+            map.setPaintProperty('discovery-heatmap', 'heatmap-weight', ['get', weightColumn]);
+            console.log(`[Signal Heatmap] Lens switched to: ${heatmapLens} → ${weightColumn}`);
+        }
+    }, [heatmapLens]);
+
+    // DEBUG: UI Verification log for heatmap lens state
+    useEffect(() => {
+        console.log(`UI VERIFICATION: Heatmap Lens is currently ${heatmapLens}`);
+    }, [heatmapLens]);
 
     const toggleStatusFilter = (filter: string) => {
         setActiveStatusFilters(prev =>
@@ -1030,6 +1059,9 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
                             </Source>
                         )}
                         <Source id="luminary-mvt" type="vector" tiles={[`${getTileUrl()}?v=${tileVersion}`]} key={`mvt-${tileVersion}`} minzoom={11} maxzoom={14}>
+                            {/* DISCOVERY HEATMAP: Z-Index locked beneath all pins via layer ordering
+                                Aesthetic Enforcement: Single sequential ramp (transparent → Ember)
+                                No divergent scales - pure Hearth Ember gradient */}
                             <Layer
                                 id="discovery-heatmap"
                                 type="heatmap"
@@ -1038,13 +1070,15 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
                                 filter={['>', ['get', 'heat_weight'], 0]}
                                 paint={{
                                     "heatmap-weight": ["get", "heat_weight"],
-                                    "heatmap-intensity": ["interpolate", ["linear"], ["zoom"], 0, 1, 11, 2],
+                                    "heatmap-intensity": ["interpolate", ["linear"], ["zoom"], 0, 0.5, 11, 1.5, 14, 2],
                                     "heatmap-color": [
                                         "interpolate", ["linear"], ["heatmap-density"],
-                                        0, "rgba(0,0,0,0)",
-                                        0.2, "rgba(255, 87, 51, 0.1)",
-                                        0.6, "rgba(255, 87, 51, 0.4)",
-                                        1, "rgba(255, 215, 0, 0.7)"
+                                        0, "rgba(0,0,0,0)",           // Transparent at zero
+                                        0.15, "rgba(224,142,95,0.05)", // Whisper of Ember
+                                        0.35, "rgba(224,142,95,0.15)", // Faint Ember
+                                        0.55, "rgba(224,142,95,0.30)", // Medium Ember
+                                        0.75, "rgba(224,142,95,0.50)", // Strong Ember
+                                        1, "rgba(224,142,95,0.70)"     // Full Ember (#E08E5F)
                                     ],
                                     "heatmap-radius": ["interpolate", ["linear"], ["zoom"], 9, 8, 14, 30],
                                     "heatmap-opacity": ["interpolate", ["linear"], ["zoom"], 11, 1, 15, 0]
@@ -1092,13 +1126,19 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
                             <div className={`${!isMobile || isFilterMobileExpanded ? 'flex' : 'hidden'} items-center gap-2 md:gap-3 px-1 ${isMobile ? 'overflow-x-auto no-scrollbar' : ''}`}>
                                 <button onClick={() => toggleStatusFilter('for_sale')} className={`flex-shrink-0 px-4 py-2.5 rounded-full text-[10px] font-bold uppercase tracking-[0.2em] transition-all duration-300 transform active:scale-95 ${activeStatusFilters.includes('for_sale') ? 'bg-[#E08E5F] text-white shadow-lg shadow-orange-900/10' : 'bg-white/40 text-gray-400 hover:bg-white/70'}`}>For Sale</button>
                                 <button onClick={() => toggleStatusFilter('for_rent')} className={`flex-shrink-0 px-4 py-2.5 rounded-full text-[10px] font-bold uppercase tracking-[0.2em] transition-all duration-300 transform active:scale-95 ${activeStatusFilters.includes('for_rent') ? 'bg-[#8C8C8C] text-white shadow-md' : 'bg-white/40 text-gray-400 hover:bg-white/70'}`}>For Rent</button>
-                                <button onClick={() => toggleStatusFilter('open_to_talking')} className={`flex-shrink-0 relative px-4 py-2.5 rounded-full text-[10px] font-bold uppercase tracking-[0.2em] transition-all duration-500 transform active:scale-95 overflow-hidden ${activeStatusFilters.includes('open_to_talking') ? 'bg-white text-[#E08E5F] shadow-lg shadow-orange-900/10 ring-1 ring-[#E08E5F]/20' : 'bg-white/40 text-gray-400 hover:bg-white/70'}`}>
-                                    {activeStatusFilters.includes('open_to_talking') && <span className="absolute inset-0 bg-[#E08E5F]/5 animate-pulse" />}
-                                    <span className="relative z-10">Open to Talking</span>
-                                </button>
+                                <Tooltip content="Homes where owners are open to conversations right now." side="bottom">
+                                    <button onClick={() => toggleStatusFilter('open_to_talking')} className={`flex-shrink-0 relative px-4 py-2.5 rounded-full text-[10px] font-bold uppercase tracking-[0.2em] transition-all duration-500 transform active:scale-95 overflow-hidden ${activeStatusFilters.includes('open_to_talking') ? 'bg-white text-[#E08E5F] shadow-lg shadow-orange-900/10 ring-1 ring-[#E08E5F]/20' : 'bg-white/40 text-gray-400 hover:bg-white/70'}`}>
+                                        {activeStatusFilters.includes('open_to_talking') && <span className="absolute inset-0 bg-[#E08E5F]/5 animate-pulse" />}
+                                        <span className="relative z-10">Open to Talking</span>
+                                    </button>
+                                </Tooltip>
                                 <div className="flex-shrink-0 w-px h-4 bg-gray-200/60 mx-1" />
-                                <button onClick={() => toggleStatusFilter('settled')} className={`flex-shrink-0 px-4 py-2.5 rounded-full text-[10px] font-bold uppercase tracking-[0.2em] transition-all duration-300 transform active:scale-95 ${activeStatusFilters.includes('settled') ? 'bg-[#4A4A4A] text-white shadow-md' : 'bg-white/40 text-gray-400 hover:bg-white/70'}`}>Settled</button>
-                                <button onClick={() => toggleStatusFilter('unclaimed')} className={`flex-shrink-0 px-4 py-2.5 rounded-full text-[10px] font-bold uppercase tracking-[0.2em] transition-all duration-300 transform active:scale-95 ${activeStatusFilters.includes('unclaimed') ? 'bg-[#D4D0C8] text-gray-700 shadow-md' : 'bg-white/40 text-gray-400 hover:bg-white/70'}`}>Unclaimed</button>
+                                <Tooltip content="Homes where a move has already happened." side="bottom">
+                                    <button onClick={() => toggleStatusFilter('settled')} className={`flex-shrink-0 px-4 py-2.5 rounded-full text-[10px] font-bold uppercase tracking-[0.2em] transition-all duration-300 transform active:scale-95 ${activeStatusFilters.includes('settled') ? 'bg-[#4A4A4A] text-white shadow-md' : 'bg-white/40 text-gray-400 hover:bg-white/70'}`}>Settled</button>
+                                </Tooltip>
+                                <Tooltip content="Homes that haven’t yet been claimed by the people who live there." side="bottom">
+                                    <button onClick={() => toggleStatusFilter('unclaimed')} className={`flex-shrink-0 px-4 py-2.5 rounded-full text-[10px] font-bold uppercase tracking-[0.2em] transition-all duration-300 transform active:scale-95 ${activeStatusFilters.includes('unclaimed') ? 'bg-[#D4D0C8] text-gray-700 shadow-md' : 'bg-white/40 text-gray-400 hover:bg-white/70'}`}>Unclaimed</button>
+                                </Tooltip>
                                 <div className="flex-shrink-0 w-px h-4 bg-gray-200/60 mx-1" />
                                 <button onClick={selectAllFilters} className="flex-shrink-0 px-3 py-2.5 rounded-full text-[9px] font-bold uppercase tracking-widest text-gray-500 hover:bg-gray-100/50 transition-colors">All</button>
                                 <button onClick={clearStatusFilters} className="flex-shrink-0 px-4 py-2.5 rounded-full text-[9px] font-bold uppercase tracking-widest text-[#E08E5F] hover:bg-[#E08E5F]/10 transition-colors">Clear</button>
@@ -1115,19 +1155,32 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
                             if (mode === "satellite") setIs3D(false);
                         }}
                         is3D={is3D}
-                        setIs3D={setIs3D}
+                        setIs3D={(enabled) => {
+                            setIs3D(enabled);
+                            const mapRefCurrent = mapRef.current?.getMap();
+                            if (mapRefCurrent) {
+                                mapRefCurrent.easeTo({
+                                    pitch: enabled ? 60 : 0,
+                                    duration: 1000
+                                });
+                            }
+                        }}
                         onResetOrientation={() => {
-                            const map = mapRef.current?.getMap();
-                            if (map) map.easeTo({ bearing: 0, pitch: 0, duration: 1000 });
+                            setIs3D(false);
+                            const mapRefCurrent = mapRef.current?.getMap();
+                            if (mapRefCurrent) mapRefCurrent.easeTo({ bearing: 0, pitch: 0, duration: 1000 });
                         }}
                         onZoomIn={() => mapRef.current?.getMap().zoomIn()}
                         onZoomOut={() => mapRef.current?.getMap().zoomOut()}
                         isPitchActive={isPitchActive}
-                        currentVibeZone={currentVibeZone}
+                        currentVibeZone={selectedPropertyId ? null : currentVibeZone}
                         isTrayExpanded={isTrayExpanded}
                         setIsTrayExpanded={setIsTrayExpanded}
                         isMobile={isMobile}
                         zoom={viewState.zoom}
+                        selectedPropertyId={selectedPropertyId}
+                        heatmapLens={heatmapLens}
+                        setHeatmapLens={setHeatmapLens}
                     />
                 </div>
 
