@@ -1,36 +1,146 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import Link from "next/link";
 import { useAuth } from "@/app/AuthProvider";
+import { motion, AnimatePresence } from "framer-motion";
+
+interface SearchResult {
+    id: string;
+    name: string;
+    description: string;
+    center: [number, number];
+    type: string; // postcode, district, place, etc.
+}
 
 interface HeaderProps {
     onOpenMessages?: () => void;
     hasUnreadMessages?: boolean;
-    onSearch?: (query: string) => void;
+    onSearch?: (query: string, result?: SearchResult) => void;
 }
 
 export function Header({ onOpenMessages, hasUnreadMessages = false, onSearch }: HeaderProps) {
     const { user, signOut } = useAuth();
     const [searchQuery, setSearchQuery] = useState("");
-    const searchInputRef = React.useRef<HTMLInputElement>(null);
+    const [suggestions, setSuggestions] = useState<SearchResult[]>([]);
+    const [selectedIndex, setSelectedIndex] = useState(-1);
+    const [isFocused, setIsFocused] = useState(false);
+    const [isLoading, setIsLoading] = useState(false);
+    const searchInputRef = useRef<HTMLInputElement>(null);
+    const dropdownRef = useRef<HTMLDivElement>(null);
 
     // Global keyboard shortcut: COMMAND+K or CTRL+K
-    React.useEffect(() => {
-        const handleKeyDown = (e: KeyboardEvent) => {
+    useEffect(() => {
+        const handleGlobalKeyDown = (e: KeyboardEvent) => {
             if ((e.metaKey || e.ctrlKey) && e.key === "k") {
                 e.preventDefault();
                 searchInputRef.current?.focus();
             }
         };
-        window.addEventListener("keydown", handleKeyDown);
-        return () => window.removeEventListener("keydown", handleKeyDown);
+        window.addEventListener("keydown", handleGlobalKeyDown);
+        return () => window.removeEventListener("keydown", handleGlobalKeyDown);
     }, []);
+
+    // Suggestions Keyboard Navigation
+    const handleKeyDown = (e: React.KeyboardEvent) => {
+        if (!isFocused || suggestions.length === 0) return;
+
+        if (e.key === "ArrowDown") {
+            e.preventDefault();
+            setSelectedIndex(prev => (prev < suggestions.length - 1 ? prev + 1 : prev));
+        } else if (e.key === "ArrowUp") {
+            e.preventDefault();
+            setSelectedIndex(prev => (prev > 0 ? prev - 1 : 0));
+        } else if (e.key === "Enter" && selectedIndex >= 0) {
+            e.preventDefault();
+            handleSelectSuggestion(suggestions[selectedIndex]);
+        } else if (e.key === "Escape") {
+            setIsFocused(false);
+        }
+    };
+
+    // Close dropdown on click outside
+    useEffect(() => {
+        const handleClickOutside = (e: MouseEvent) => {
+            if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node) &&
+                searchInputRef.current && !searchInputRef.current.contains(e.target as Node)) {
+                setIsFocused(false);
+            }
+        };
+        document.addEventListener("mousedown", handleClickOutside);
+        return () => document.removeEventListener("mousedown", handleClickOutside);
+    }, []);
+
+    // Geocoding Suggester (UK-Biased Photon fallback for missing Mapbox token)
+    useEffect(() => {
+        const fetchSuggestions = async () => {
+            if (searchQuery.length < 3) {
+                setSuggestions([]);
+                setSelectedIndex(-1);
+                return;
+            }
+
+            setIsLoading(true);
+            try {
+                // Biasing towards UK (bbox roughly UK: -8, 49, 2, 61)
+                const url = `https://photon.komoot.io/api/?q=${encodeURIComponent(searchQuery)}&limit=5&lang=en&lat=55.0&lon=-1.5&bbox=-8.6,49.8,1.7,60.8`;
+                const response = await fetch(url);
+                const data = await response.json();
+
+                if (data.features) {
+                    const results: SearchResult[] = data.features
+                        .map((f: any, index: number) => {
+                            const props = f.properties;
+                            const name = props.name || props.street || "";
+                            const description = [props.city, props.postcode, props.country].filter(Boolean).join(", ");
+
+                            // Strictly: postcode, district, place
+                            let type = "";
+                            if (props.postcode) type = "postcode";
+                            else if (props.osm_value === "suburb" || props.osm_value === "district" || props.osm_value === "city_district") type = "district";
+                            else if (props.osm_value === "city" || props.osm_value === "town" || props.osm_value === "village") type = "place";
+
+                            if (!type) return null;
+
+                            return {
+                                id: `${index}-${props.osm_id}`,
+                                name,
+                                description,
+                                center: f.geometry.coordinates,
+                                type
+                            };
+                        })
+                        .filter((r: any): r is SearchResult => r !== null);
+                    setSuggestions(results);
+                    setSelectedIndex(-1);
+                }
+            } catch (err) {
+                console.error("Geocoding fetch failed:", err);
+            } finally {
+                setIsLoading(false);
+            }
+        };
+
+        const timer = setTimeout(fetchSuggestions, 300);
+        return () => clearTimeout(timer);
+    }, [searchQuery]);
 
     const handleSearchSubmit = (e: React.FormEvent) => {
         e.preventDefault();
         if (searchQuery.trim() && onSearch) {
             onSearch(searchQuery.trim());
+            setIsFocused(false);
+            setSelectedIndex(-1);
+        }
+    };
+
+    const handleSelectSuggestion = (result: SearchResult) => {
+        setSearchQuery(result.name);
+        setSuggestions([]);
+        setSelectedIndex(-1);
+        setIsFocused(false);
+        if (onSearch) {
+            onSearch(result.name, result);
         }
     };
 
@@ -50,10 +160,10 @@ export function Header({ onOpenMessages, hasUnreadMessages = false, onSearch }: 
             </div>
 
             {/* Center: Unified Search */}
-            <div className="flex-1 max-w-[480px] px-4 flex justify-center">
+            <div className="flex-1 max-w-[480px] px-4 flex justify-center relative">
                 <form onSubmit={handleSearchSubmit} className="relative w-full group">
                     <div className="absolute inset-y-0 left-3.5 flex items-center pointer-events-none">
-                        <svg className="w-4 h-4 text-ink/30 group-focus-within:text-ink/60 transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <svg className={`w-4 h-4 transition-colors ${isLoading ? 'text-ember animate-pulse' : 'text-ink/30 group-focus-within:text-ink/60'}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
                         </svg>
                     </div>
@@ -61,9 +171,11 @@ export function Header({ onOpenMessages, hasUnreadMessages = false, onSearch }: 
                         ref={searchInputRef}
                         type="text"
                         value={searchQuery}
+                        onFocus={() => setIsFocused(true)}
                         onChange={(e) => setSearchQuery(e.target.value)}
-                        placeholder="Search neighborhoods..."
-                        className="w-full h-10 pl-10 pr-12 bg-white/40 border border-ink/10 rounded-full text-sm font-sans placeholder:font-serif placeholder:italic placeholder:text-ink/30 focus:outline-none focus:ring-2 focus:ring-ember/20 focus:border-ember/40 transition-all"
+                        onKeyDown={handleKeyDown}
+                        placeholder="Search neighborhoods or postcodes..."
+                        className="w-full h-10 pl-10 pr-12 bg-white/40 border border-ink/10 rounded-full text-sm font-sans placeholder:font-serif placeholder:italic placeholder:text-ink/30 focus:outline-none focus:ring-2 focus:ring-ember/20 focus:border-ember/40 transition-all text-ink selection:bg-ember/30"
                     />
                     <div className="absolute inset-y-0 right-3 flex items-center pointer-events-none">
                         <kbd className="hidden sm:inline-flex items-center h-5 px-1.5 border border-ink/20 rounded-[4px] font-sans text-[10px] font-medium text-ink/40 bg-white/30">
@@ -71,6 +183,56 @@ export function Header({ onOpenMessages, hasUnreadMessages = false, onSearch }: 
                         </kbd>
                     </div>
                 </form>
+
+                {/* Suggestions Dropdown */}
+                <AnimatePresence>
+                    {isFocused && (searchQuery.length > 0 || suggestions.length > 0) && (
+                        <motion.div
+                            ref={dropdownRef}
+                            initial={{ opacity: 0, y: 10, scale: 0.98 }}
+                            animate={{ opacity: 1, y: 0, scale: 1 }}
+                            exit={{ opacity: 0, y: 10, scale: 0.98 }}
+                            transition={{ duration: 0.2, ease: "easeOut" }}
+                            className="absolute top-12 left-4 right-4 bg-[#F9F7F4]/95 backdrop-blur-xl border border-ink/10 rounded-2xl shadow-2xl shadow-ink/20 overflow-hidden"
+                        >
+                            {isLoading && suggestions.length === 0 ? (
+                                <div className="p-8 text-center">
+                                    <div className="inline-block w-6 h-6 border-2 border-ember border-t-transparent rounded-full animate-spin mb-2" />
+                                    <p className="text-xs font-serif italic text-ink/40">Searching the UK...</p>
+                                </div>
+                            ) : suggestions.length > 0 ? (
+                                <div className="py-2">
+                                    {suggestions.map((result, index) => (
+                                        <button
+                                            key={result.id}
+                                            onClick={() => handleSelectSuggestion(result)}
+                                            onMouseEnter={() => setSelectedIndex(index)}
+                                            className={`w-full px-4 py-3 flex items-start gap-3 text-left transition-colors group ${selectedIndex === index ? 'bg-[rgba(224,142,95,0.15)] shadow-inner' : 'hover:bg-[rgba(224,142,95,0.08)]'}`}
+                                        >
+                                            <div className="mt-0.5 text-ember/40 group-hover:text-ember transition-colors">
+                                                {result.type === 'postcode' ? (
+                                                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" strokeWidth={2} /></svg>
+                                                ) : result.type === 'district' ? (
+                                                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path d="M19 21l-7-5-7 5V5a2 2 0 012-2h10a2 2 0 012 2v16z" strokeWidth={2} /></svg>
+                                                ) : (
+                                                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" strokeWidth={2} /><path d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" strokeWidth={2} /></svg>
+                                                )}
+                                            </div>
+                                            <div className="flex flex-col">
+                                                <span className="text-sm font-medium text-ink group-hover:text-ember transition-colors">{result.name}</span>
+                                                <span className="text-[11px] text-ink/40 group-hover:text-ink/60 transition-colors uppercase tracking-wider">{result.description}</span>
+                                            </div>
+                                        </button>
+                                    ))}
+                                </div>
+                            ) : searchQuery.length >= 3 ? (
+                                <div className="p-8 text-center">
+                                    <p className="text-sm text-ink/40 font-serif italic">No neighborhoods found</p>
+                                </div>
+                            ) : null}
+                        </motion.div>
+                    )}
+                </AnimatePresence>
             </div>
 
             {/* Right: Utility HUD */}
@@ -114,3 +276,4 @@ export function Header({ onOpenMessages, hasUnreadMessages = false, onSearch }: 
         </header>
     );
 }
+

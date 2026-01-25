@@ -268,6 +268,34 @@ export async function GET(request: NextRequest): Promise<Response> {
             );
         }
 
+        // Check for specific postcode search
+        const postcodeQuery = searchParams.get("postcode");
+        if (postcodeQuery) {
+            const { data, error } = await supabase
+                .from("property_public_view")
+                .select(VIEW_COLUMNS)
+                .ilike("postcode", `${postcodeQuery}%`) // Match exact or start of postcode
+                .limit(50);
+
+            if (error) {
+                console.error("[/api/properties] Postcode query error:", error);
+                return jsonErr(error.message, 500, "SUPABASE_ERROR");
+            }
+
+            const rawProperties = (data || []) as unknown as RawProperty[];
+            const propertiesWithMine = rawProperties.map((p) => mapProperty(p, userId));
+
+            return NextResponse.json(
+                { ok: true, data: propertiesWithMine },
+                {
+                    status: 200,
+                    headers: {
+                        "Cache-Control": userId ? "private, max-age=10" : "public, max-age=10",
+                    },
+                }
+            );
+        }
+
         // Require bbox for list queries
         const bboxParam = searchParams.get("bbox");
         if (!bboxParam) {

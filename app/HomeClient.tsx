@@ -22,7 +22,7 @@ export default function HomeClient() {
         <main className="w-full h-screen overflow-hidden flex flex-col pt-16">
             <Header
                 onOpenMessages={() => mapRef.current?.openMessageCentre()}
-                onSearch={(query) => mapRef.current?.handleSearch(query)}
+                onSearch={(query, result) => mapRef.current?.handleSearch(query, result)}
             />
             <div className="flex-1 relative">
                 <PropertyMap ref={mapRef} />
