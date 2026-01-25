@@ -174,7 +174,7 @@ export function Header({ onOpenMessages, hasUnreadMessages = false, onSearch }: 
                         onFocus={() => setIsFocused(true)}
                         onChange={(e) => setSearchQuery(e.target.value)}
                         onKeyDown={handleKeyDown}
-                        placeholder="Search neighborhoods or postcodes..."
+                        placeholder="Search neighbourhoods or postcodes..."
                         className="w-full h-10 pl-10 pr-12 bg-white/40 border border-ink/10 rounded-full text-sm font-sans placeholder:font-serif placeholder:italic placeholder:text-ink/30 focus:outline-none focus:ring-2 focus:ring-ember/20 focus:border-ember/40 transition-all text-ink selection:bg-ember/30"
                     />
                     <div className="absolute inset-y-0 right-3 flex items-center pointer-events-none">
@@ -227,7 +227,7 @@ export function Header({ onOpenMessages, hasUnreadMessages = false, onSearch }: 
                                 </div>
                             ) : searchQuery.length >= 3 ? (
                                 <div className="p-8 text-center">
-                                    <p className="text-sm text-ink/40 font-serif italic">No neighborhoods found</p>
+                                    <p className="text-sm text-ink/40 font-serif italic">No neighbourhoods found</p>
                                 </div>
                             ) : null}
                         </motion.div>
