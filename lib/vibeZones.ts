@@ -18,7 +18,7 @@ export interface VibeZone {
  * @param type The asset type suffix (default: "hero")
  * @returns The public URL for the asset
  */
-export function getVibeAssetUrl(key: string, type: 'hero' | 'thumb' = 'hero'): string {
+export function getVibeAssetUrl(key: string, type: 'hero' | 'thumb' | 'support1' | 'support2' = 'hero'): string {
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
     if (!supabaseUrl) {
         console.error("[getVibeAssetUrl] NEXT_PUBLIC_SUPABASE_URL is not defined");
