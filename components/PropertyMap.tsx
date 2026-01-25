@@ -198,6 +198,26 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
     const [activeAnchorId, setActiveAnchorId] = useState<string | null>(null);
     const [lockedAnchorIds, setLockedAnchorIds] = useState<string[]>([]);
     const [selectedAnchor, setSelectedAnchor] = useState<GeoJSON.Feature<GeoJSON.Point, AnchorFeatureProperties> | null>(null);
+    const [discoveryAnchorIds, setDiscoveryAnchorIds] = useState<string[]>([]);
+    const hasShownDiscoveryPulse = useRef(false);
+
+    // Anchor Discovery Pulse Effect - triggers once when user enters local scale
+    useEffect(() => {
+        const map = mapRef.current?.getMap();
+        if (viewState.zoom >= 14.5 && !hasShownDiscoveryPulse.current && map) {
+            // Use queryRenderedFeatures to get actually visible anchors
+            const renderedAnchors = map.queryRenderedFeatures({ layers: ["anchor-icons"] });
+            const uniqueIds = [...new Set(renderedAnchors.map(f => f.properties?.id).filter(Boolean))] as string[];
+            const visibleCandidates = uniqueIds.slice(0, 3);
+
+            if (visibleCandidates.length > 0) {
+                console.log('[Anchor Discovery] Triggering pulse cue for:', visibleCandidates);
+                hasShownDiscoveryPulse.current = true;
+                setDiscoveryAnchorIds(visibleCandidates);
+                setTimeout(() => setDiscoveryAnchorIds([]), 2000);
+            }
+        }
+    }, [viewState.zoom]);
 
     // Postcode Boundary state
     const [postcodeBoundary, setPostcodeBoundary] = useState<GeoJSON.FeatureCollection | null>(null);
@@ -936,19 +956,28 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
 
     const handleMapClick = useCallback(async (evt: MapLayerMouseEvent) => {
         try {
+            const map = mapRef.current?.getMap();
+            if (!map) return;
+
+            // First, check for anchor hits using queryRenderedFeatures (more reliable)
+            if (viewState.zoom >= 14.5) {
+                const anchorHits = map.queryRenderedFeatures(evt.point, { layers: ["anchor-hitbox", "anchor-icons"] });
+                if (anchorHits.length > 0) {
+                    const anchorId = anchorHits[0].properties?.id;
+                    if (anchorId) {
+                        console.log('[MapClick] Anchor clicked via queryRenderedFeatures:', anchorId);
+                        handleAnchorClick(anchorId);
+                        return;
+                    }
+                }
+            }
+
             const features = evt.features;
             console.log('[MapClick] Features at click:', features?.map(f => f.layer?.id));
 
             if (!features || features.length === 0) return;
             if (features[0].source?.includes('cluster') || features[0].properties?.cluster) {
                 console.log('[MapClick] Cluster clicked');
-                return;
-            }
-
-            const anchorFeature = features.find((f) => f.layer?.id === "anchor-icons");
-            if (anchorFeature && anchorFeature.properties?.id) {
-                console.log('[MapClick] Anchor clicked:', anchorFeature.properties.id);
-                handleAnchorClick(anchorFeature.properties.id);
                 return;
             }
 
@@ -969,7 +998,7 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
                 console.log('[MapClick] No property feature found');
             }
         } catch (e) { console.error('[MapClick] Error:', e); }
-    }, [handleAnchorClick]);
+    }, [handleAnchorClick, viewState.zoom]);
 
     const handleCloseSheet = useCallback(() => {
         setSelectedPropertyId(null);
@@ -1051,7 +1080,7 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
                         antialias={true}
                         attributionControl={false}
                         reuseMaps
-                        interactiveLayerIds={["hearth-pins", "anchor-icons", "property-points"]}
+                        interactiveLayerIds={["hearth-pins", "anchor-icons", "anchor-hitbox", "property-points"]}
                     >
                         {viewMode === "satellite" && (
                             <Source id="satellite-source" type="raster" tiles={[ARCGIS_SATELLITE_URL]} tileSize={256}>
@@ -1092,9 +1121,64 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
                         </Source>
                         {anchorData.features.length > 0 && (
                             <Source id="anchor-source" type="geojson" data={anchorData}>
-                                <Layer id="anchor-radii" type="circle" filter={anchorTierFilter === 'all' ? true : ["==", ["get", "tier"], anchorTierFilter]} paint={{ "circle-radius": ["interpolate", ["exponential", 2], ["zoom"], 10, 12.5, 15, 400, 20, 12800], "circle-pitch-alignment": "map", "circle-color": EMBER, "circle-opacity": ["case", ["in", ["get", "id"], ["literal", lockedAnchorIds]], 0.1, ["==", ["get", "id"], activeAnchorId || ""], 0.1, 0], "circle-stroke-width": ["case", ["in", ["get", "id"], ["literal", lockedAnchorIds]], 2, ["==", ["get", "id"], activeAnchorId || ""], 2, 0], "circle-stroke-color": EMBER, "circle-stroke-opacity": 0.3 }} />
-                                <Layer id="anchor-icons" type="symbol" minzoom={11} filter={anchorTierFilter === 'all' ? true : ["==", ["get", "tier"], anchorTierFilter]} layout={{ "icon-image": ["case", ["==", ["get", "subtype"], "primary"], "hearth-school", ["==", ["get", "subtype"], "secondary"], "hearth-school", ["==", ["get", "subtype"], "metro"], "hearth-rail", ["==", ["get", "subtype"], "ferry"], "hearth-rail", ["==", ["get", "subtype"], "bus"], "hearth-rail", ["==", ["get", "subtype"], "park"], "hearth-park", ["==", ["get", "subtype"], "coastal"], "hearth-coastal", ["==", ["get", "subtype"], "village_center"], "hearth-village", ["==", ["get", "subtype"], "gp"], "hearth-health", ["==", ["get", "subtype"], "hospital"], "hearth-health", ["==", ["get", "subtype"], "dentist"], "hearth-health", ["==", ["get", "subtype"], "supermarket"], "hearth-shop", ["==", ["get", "subtype"], "convenience"], "hearth-shop", "hearth-park"], "icon-size": 1, "icon-allow-overlap": true, "icon-ignore-placement": true }} paint={{ "icon-opacity": ["interpolate", ["linear"], ["zoom"], 11.5, 0, 12, 1], "icon-color": ["case", ["in", ["get", "id"], ["literal", lockedAnchorIds]], EMBER, ["==", ["get", "id"], activeAnchorId || ""], EMBER, INK_GREY], "icon-halo-color": "#ffffff", "icon-halo-width": 1 }} />
-                                <Layer id="anchor-labels" type="symbol" minzoom={14} filter={anchorTierFilter === 'all' ? true : ["==", ["get", "tier"], anchorTierFilter]} layout={{ "text-field": ["get", "name"], "text-size": 10, "text-offset": [0, 1.2], "text-anchor": "top", "text-max-width": 8 }} paint={{ "text-color": ["case", ["in", ["get", "id"], ["literal", lockedAnchorIds]], EMBER, ["==", ["get", "id"], activeAnchorId || ""], EMBER, INK_GREY], "text-halo-color": "#ffffff", "text-halo-width": 1 }} />
+                                {/* Anchor Radii (Halos) - Only visible at zoom >= 14.5 via minzoom */}
+                                <Layer
+                                    id="anchor-radii"
+                                    type="circle"
+                                    minzoom={14.5}
+                                    filter={anchorTierFilter === 'all' ? true : ["==", ["get", "tier"], anchorTierFilter]}
+                                    paint={{
+                                        "circle-radius": ["interpolate", ["exponential", 2], ["zoom"], 14.5, 200, 15, 400, 20, 12800],
+                                        "circle-pitch-alignment": "map",
+                                        "circle-color": EMBER,
+                                        "circle-opacity": [
+                                            "case",
+                                            ["in", ["get", "id"], ["literal", [...lockedAnchorIds, ...discoveryAnchorIds]]], viewMode === "satellite" ? 0.08 : 0.12,
+                                            ["==", ["get", "id"], activeAnchorId || ""], viewMode === "satellite" ? 0.08 : 0.12,
+                                            0
+                                        ],
+                                        "circle-stroke-width": [
+                                            "case",
+                                            ["in", ["get", "id"], ["literal", lockedAnchorIds]], 1.5,
+                                            ["==", ["get", "id"], activeAnchorId || ""], 1.5,
+                                            0
+                                        ],
+                                        "circle-stroke-color": EMBER,
+                                        "circle-stroke-opacity": viewMode === "satellite" ? 0.15 : 0.25
+                                    }}
+                                />
+                                {/* Anchor Icons - Fade in from 12.5, fully interactive at 14.5 */}
+                                <Layer
+                                    id="anchor-icons"
+                                    type="symbol"
+                                    minzoom={12.5}
+                                    filter={anchorTierFilter === 'all' ? true : ["==", ["get", "tier"], anchorTierFilter]}
+                                    layout={{
+                                        "icon-image": ["case", ["==", ["get", "subtype"], "primary"], "hearth-school", ["==", ["get", "subtype"], "secondary"], "hearth-school", ["==", ["get", "subtype"], "metro"], "hearth-rail", ["==", ["get", "subtype"], "ferry"], "hearth-rail", ["==", ["get", "subtype"], "bus"], "hearth-rail", ["==", ["get", "subtype"], "park"], "hearth-park", ["==", ["get", "subtype"], "coastal"], "hearth-coastal", ["==", ["get", "subtype"], "village_center"], "hearth-village", ["==", ["get", "subtype"], "gp"], "hearth-health", ["==", ["get", "subtype"], "hospital"], "hearth-health", ["==", ["get", "subtype"], "dentist"], "hearth-health", ["==", ["get", "subtype"], "supermarket"], "hearth-shop", ["==", ["get", "subtype"], "convenience"], "hearth-shop", "hearth-park"],
+                                        "icon-size": ["case", ["in", ["get", "id"], ["literal", discoveryAnchorIds]], 1.2, 1],
+                                        "icon-allow-overlap": true,
+                                        "icon-ignore-placement": true
+                                    }}
+                                    paint={{
+                                        "icon-opacity": ["interpolate", ["linear"], ["zoom"], 12.5, 0.7, 14.5, 1],
+                                        "icon-color": ["case", ["in", ["get", "id"], ["literal", lockedAnchorIds]], EMBER, ["==", ["get", "id"], activeAnchorId || ""], EMBER, INK_GREY],
+                                        "icon-halo-color": "#ffffff",
+                                        "icon-halo-width": 1.5
+                                    }}
+                                />
+                                {/* Invisible hit area for better click detection at interactive zoom */}
+                                <Layer
+                                    id="anchor-hitbox"
+                                    type="circle"
+                                    minzoom={14.5}
+                                    filter={anchorTierFilter === 'all' ? true : ["==", ["get", "tier"], anchorTierFilter]}
+                                    paint={{
+                                        "circle-radius": 20,
+                                        "circle-opacity": 0,
+                                        "circle-stroke-opacity": 0
+                                    }}
+                                />
+                                <Layer id="anchor-labels" type="symbol" minzoom={14.5} filter={anchorTierFilter === 'all' ? true : ["==", ["get", "tier"], anchorTierFilter]} layout={{ "text-field": ["get", "name"], "text-size": 10, "text-offset": [0, 1.2], "text-anchor": "top", "text-max-width": 8 }} paint={{ "text-color": ["case", ["in", ["get", "id"], ["literal", lockedAnchorIds]], EMBER, ["==", ["get", "id"], activeAnchorId || ""], EMBER, INK_GREY], "text-halo-color": "#ffffff", "text-halo-width": 1 }} />
                             </Source>
                         )}
                         {postcodeBoundary && (
