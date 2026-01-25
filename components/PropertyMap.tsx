@@ -134,7 +134,7 @@ const QUERYABLE_POINT_LAYERS = ["property-points"];
 export interface PropertyMapRef {
     refreshMapPins: () => Promise<void>;
     openMessageCentre: () => void;
-    handleSearch: (query: string) => Promise<void>;
+    handleSearch: (query: string, result?: any) => Promise<void>;
 }
 
 const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
@@ -194,6 +194,13 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
     const [lockedAnchorIds, setLockedAnchorIds] = useState<string[]>([]);
     const [selectedAnchor, setSelectedAnchor] = useState<GeoJSON.Feature<GeoJSON.Point, AnchorFeatureProperties> | null>(null);
 
+    // Postcode Boundary state
+    const [postcodeBoundary, setPostcodeBoundary] = useState<GeoJSON.FeatureCollection | null>(null);
+    const [boundaryOpacity, setBoundaryOpacity] = useState(1);
+    const boundaryFadeTimerRef = useRef<NodeJS.Timeout | null>(null);
+    // Search Alpha: Precision Pin marker ref
+    const currentMarker = useRef<maplibregl.Marker | null>(null);
+
     // Tiered Anchor Filter
     const [anchorTierFilter, setAnchorTierFilter] = useState<'all' | 'foundational' | 'practical' | 'spirit'>('all');
 
@@ -252,11 +259,227 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
         openMessageCentre: () => {
             setShowMessageCentre(true);
         },
-        handleSearch: async (query: string) => {
-            if (!query) return;
+        handleSearch: async (query: string, result?: any) => {
+            console.log('Search Triggered for:', query);
+            if (!query) {
+                setPostcodeBoundary(null);
+                return;
+            }
 
-            // 1. Local Neighborhood Match
-            const lowerQuery = query.toLowerCase();
+            // 0. Structured result or Postcode-like extraction
+            const sanitisedQuery = (result?.name || query).trim();
+
+            // Sovereign Local Router: Clean the query
+            const cleanQuery = sanitisedQuery.toUpperCase().replace(/\s+/g, ' ').trim();
+
+            // Detect if it's a full postcode (e.g., 'NE30 4LZ') or just an outcode (e.g., 'NE30')
+            const fullPostcodeMatch = cleanQuery.match(/^([A-Z]{1,2}[0-9][A-Z0-9]?)\s+([0-9][A-Z]{2})$/i);
+            const outcodeMatch = cleanQuery.match(/^[A-Z]{1,2}[0-9][A-Z0-9]?$/i);
+
+            const isFullPostcode = !!fullPostcodeMatch;
+            const isOutcode = !!outcodeMatch;
+
+            if (isFullPostcode || isOutcode) {
+                // =============================================================================
+                // SEARCH ALPHA: Precision Pin Configuration (Day 1 Rollout)
+                // Polygons deactivated for stability - using centroid marker instead
+                // =============================================================================
+
+                /* DEACTIVATED: Polygon boundary rendering (too unstable for Day 1)
+                const mode = isFullPostcode ? 'units' : 'districts';
+                const filename = isFullPostcode ? cleanQuery : cleanQuery;
+
+                const processGeometry = (fullResponseObj: any, sourceName: string, nominatimBbox?: string[]) => {
+                    try {
+                        let geometryTarget = null;
+                        if (fullResponseObj.type === 'FeatureCollection' && fullResponseObj.features?.[0]?.geometry) {
+                            geometryTarget = fullResponseObj.features[0].geometry;
+                        } else if (fullResponseObj.type === 'Feature' && fullResponseObj.geometry) {
+                            geometryTarget = fullResponseObj.geometry;
+                        } else {
+                            geometryTarget = fullResponseObj.geojson || fullResponseObj.geometry || fullResponseObj;
+                        }
+                        if (!geometryTarget || !geometryTarget.coordinates) throw new Error("No geometry found in response");
+
+                        const unpack = (coords: any): [number, number][] => {
+                            if (Array.isArray(coords) && typeof coords[0] === 'number') {
+                                let [lon, lat] = coords;
+                                if (Math.abs(lat) < 2 && Math.abs(lon) > 40) [lon, lat] = [lat, lon];
+                                return [[lon, lat]];
+                            }
+                            return coords.reduce((acc: [number, number][], c: any) => acc.concat(unpack(c)), []);
+                        };
+
+                        let finalPoints = unpack(geometryTarget.coordinates);
+                        if (finalPoints.length > 0) {
+                            finalPoints.push([...finalPoints[0]]);
+                        }
+
+                        console.log(`LOCAL ROUTER SUCCESS: Loaded ${cleanQuery} from ${mode} folder (${finalPoints.length} points)`);
+
+                        const collection: any = {
+                            type: 'FeatureCollection',
+                            features: [{
+                                type: 'Feature',
+                                geometry: { type: 'Polygon', coordinates: [finalPoints] },
+                                properties: { source: sourceName }
+                            }]
+                        };
+
+                        const map = mapRef.current?.getMap();
+                        if (map) {
+                            const uniqueId = 'postcode-' + Date.now();
+                            console.log('Layer Injected with ID:', uniqueId);
+
+                            // Nuclear Cleanup
+                            try {
+                                const style = map.getStyle();
+                                if (style && style.layers) {
+                                    style.layers.forEach(layer => {
+                                        if (layer.id.startsWith('postcode-')) map.removeLayer(layer.id);
+                                    });
+                                }
+                                const currentSources = map.getStyle().sources;
+                                Object.keys(currentSources).forEach(s => {
+                                    if (s.startsWith('postcode-')) map.removeSource(s);
+                                });
+                            } catch (e) { }
+
+                            // DEACTIVATED: addSource and addLayer for polygon boundaries
+                            // map.addSource(uniqueId, { type: 'geojson', data: collection });
+                            // map.addLayer({ id: uniqueId + '-fill', type: 'fill', source: uniqueId, paint: { 'fill-color': '#E08E5F', 'fill-opacity': 0.15 } }, 'discovery-heatmap');
+                            // map.addLayer({ id: uniqueId + '-outline', type: 'line', source: uniqueId, paint: { 'line-color': '#1B1B1B', 'line-width': 2, 'line-opacity': 1.0 } }, 'discovery-heatmap');
+
+                            const lons = finalPoints.map(c => c[0]);
+                            const lats = finalPoints.map(c => c[1]);
+                            map.fitBounds([[Math.min(...lons), Math.min(...lats)], [Math.max(...lons), Math.max(...lats)]], { padding: 100, duration: 2000 });
+                        }
+
+                        setPostcodeBoundary(collection);
+                        setBoundaryOpacity(1);
+                    } catch (err) {
+                        console.error('[Boundary] Unpacker failed:', err);
+                    }
+                };
+
+                fetch(`/${mode}/${filename}.geojson`)
+                    .then(res => {
+                        if (!res.ok) throw new Error(`Local Miss: ${filename} not found in /${mode}/`);
+                        return res.json();
+                    })
+                    .then(data => processGeometry(data, `${mode}/${filename}`))
+                    .catch(e => {
+                        console.warn(`[Boundary] ${e.message}`);
+                    });
+                END DEACTIVATED */
+
+                // SEARCH ALPHA: The Precision Pin - fetch centroid from postcodes.io
+                const lookupPostcode = isFullPostcode ? cleanQuery.replace(' ', '') : cleanQuery;
+                const apiEndpoint = isFullPostcode
+                    ? `https://api.postcodes.io/postcodes/${lookupPostcode}`
+                    : `https://api.postcodes.io/outcodes/${lookupPostcode}`;
+
+                fetch(apiEndpoint)
+                    .then(res => res.json())
+                    .then(data => {
+                        if (data.result) {
+                            const { longitude: lon, latitude: lat } = data.result;
+                            const map = mapRef.current?.getMap();
+
+                            if (map) {
+                                // Remove existing marker if it exists
+                                if (currentMarker.current) currentMarker.current.remove();
+
+                                // Add a fresh Hearth Ember pin
+                                currentMarker.current = new maplibregl.Marker({ color: '#E08E5F' })
+                                    .setLngLat([lon, lat])
+                                    .addTo(map);
+
+                                // The 'Discovery Fly-To': zoom 13 for district, zoom 17 for unit
+                                const targetZoom = isFullPostcode ? 17 : 13;
+                                map.flyTo({
+                                    center: [lon, lat],
+                                    zoom: targetZoom,
+                                    duration: 2000,
+                                    essential: true
+                                });
+
+                                // Audit log
+                                console.log(`SEARCH ROLLOUT: Marker dropped at ${cleanQuery}`);
+                            }
+                        } else {
+                            console.warn(`[Search Alpha] No result from postcodes.io for: ${cleanQuery}`);
+                        }
+                    })
+                    .catch(err => console.error('[Search Alpha] postcodes.io fetch failed:', err));
+            }
+
+
+            if (result && result.center) {
+                const [lon, lat] = result.center;
+                let targetZoom = 15;
+                if (result.type === 'postcode' || result.type === 'street' || result.type === 'address') targetZoom = 16;
+                else if (result.type === 'district' || result.type === 'place' || result.type === 'city' || result.type === 'town') targetZoom = 13.5;
+
+                mapRef.current?.getMap().easeTo({
+                    center: [lon, lat],
+                    zoom: targetZoom,
+                    duration: 2500,
+                    essential: true
+                });
+                return;
+            }
+
+            // --- LEGACY / FALLBACK SEARCH LOGIC ---
+            // (Keeping this for direct enters without selection, although dropdown is now preferred)
+
+            // 0. Clear previous boundary
+            setPostcodeBoundary(null);
+
+            const lowerQuery = query.toLowerCase().trim();
+
+            // 1. Postcode detection (UK Postcode Regex)
+            const POSTCODE_REGEX = /^[A-Z]{1,2}[0-9][A-Z0-9]? ?[0-9][A-Z]{2}$/i;
+            const SECTOR_REGEX = /^([A-Z]{1,2}[0-9][A-Z0-9]?) ?([0-9])/i;
+            const DISTRICT_REGEX = /^([A-Z]{1,2}[0-9][A-Z0-9]?)$/i;
+
+            if (POSTCODE_REGEX.test(lowerQuery) || SECTOR_REGEX.test(lowerQuery) || DISTRICT_REGEX.test(lowerQuery)) {
+                inspectLog("SEARCH_POSTCODE_DETECTED", { query });
+
+                // (Boundary fetch removed due to ArcGIS service instability)
+
+                // Query our properties by postcode
+                try {
+                    const response = await fetch(`/api/properties?postcode=${encodeURIComponent(query)}`);
+                    const data = await response.json();
+
+                    if (data.ok && data.data && data.data.length > 0) {
+                        const properties = data.data;
+                        // If exact match found, fly and select
+                        if (properties.length === 1) {
+                            const p = properties[0];
+                            handleOpenProperty({ propertyId: p.property_id, lat: p.lat, lon: p.lon, zoom: 18 });
+                            inspectLog("SEARCH_EXACT_MATCH", { postcode: p.postcode });
+                            return;
+                        } else {
+                            // Multiple properties in postcode, fly to centroid
+                            const avgLat = properties.reduce((acc: number, p: any) => acc + p.lat, 0) / properties.length;
+                            const avgLon = properties.reduce((acc: number, p: any) => acc + p.lon, 0) / properties.length;
+                            mapRef.current?.getMap().easeTo({
+                                center: [avgLon, avgLat],
+                                zoom: 17,
+                                duration: 2500
+                            });
+                            inspectLog("SEARCH_POSTCODE_AREA_MATCH", { count: properties.length });
+                            return;
+                        }
+                    }
+                } catch (err) {
+                    console.error("[Search] Local property query failed:", err);
+                }
+            }
+
+            // 2. Local Neighborhood Match
             const localMatch = VIBE_ZONES.find(z =>
                 z.name.toLowerCase().includes(lowerQuery) ||
                 z.punchline.toLowerCase().includes(lowerQuery)
@@ -272,7 +495,7 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
                 return;
             }
 
-            // 2. Global Geocoding Fallback (Photon)
+            // 3. Global Geocoding Fallback (Photon)
             try {
                 inspectLog("SEARCH_GEOCODE_ATTEMPT", { query });
                 const response = await fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(query)}&limit=1`);
@@ -382,6 +605,22 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
                 fetchVibeStats(bbox);
                 currentBboxRef.current = bbox;
                 if (isTrayExpanded) fetchLiveFeed(bbox);
+
+                // VibeSentinel Performance Lockdown: Only check zone on move end
+                const { latitude, longitude } = evt.viewState;
+                let nearestZone: VibeZone | null = null;
+                let minDistance = Infinity;
+                VIBE_ZONES.forEach((zone) => {
+                    const [zLat, zLon] = zone.centroid;
+                    const dist = getDistanceFromLatLonInKm(latitude, longitude, zLat, zLon);
+                    if (dist < minDistance) { minDistance = dist; nearestZone = zone; }
+                });
+                if (minDistance > 2.5) nearestZone = null;
+                setCurrentVibeZone(prev => {
+                    if (prev?.id === nearestZone?.id) return prev;
+                    console.log(`[VibeSentinel] Updated: ${nearestZone?.name || 'None'}`);
+                    return nearestZone;
+                });
             }, DEBOUNCE_MS);
         },
         [fetchVibeStats, isTrayExpanded]
@@ -557,7 +796,7 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
                 if (firstLayerId && firstLayerId !== "satellite-layer") map.moveLayer("satellite-layer", firstLayerId);
             } catch { }
         }
-        ["discovery-heatmap", "building-glow", "property-points", "anchor-radii", "anchor-labels", "anchor-icons", "hearth-pins", "hearth-pulse", "hearth-glyphs"].forEach(id => {
+        ["postcode-boundary-fill", "postcode-boundary-outline", "discovery-heatmap", "building-glow", "property-points", "anchor-radii", "anchor-labels", "anchor-icons", "hearth-pins", "hearth-pulse", "hearth-glyphs"].forEach(id => {
             if (map.getLayer(id)) map.moveLayer(id);
         });
     }, []);
@@ -709,26 +948,6 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
         setPendingConversationId(null);
     }, []);
 
-    useEffect(() => {
-        const checkVibeZone = () => {
-            const { latitude, longitude } = viewState;
-            let nearestZone: VibeZone | null = null;
-            let minDistance = Infinity;
-            VIBE_ZONES.forEach((zone) => {
-                const [zLat, zLon] = zone.centroid;
-                const dist = getDistanceFromLatLonInKm(latitude, longitude, zLat, zLon);
-                if (dist < minDistance) { minDistance = dist; nearestZone = zone; }
-            });
-            if (minDistance > 2.5) nearestZone = null;
-            // Hysteresis: Only update if changed
-            setCurrentVibeZone(prev => {
-                console.log(`[VibeSentinel] Center: ${latitude.toFixed(4)}, ${longitude.toFixed(4)} | Nearest: ${nearestZone?.name} | Dist: ${minDistance.toFixed(2)}km`);
-                if (prev?.id === nearestZone?.id) return prev;
-                return nearestZone;
-            });
-        };
-        checkVibeZone();
-    }, [viewState.latitude, viewState.longitude]);
 
     const refreshIntentForProperty = useCallback(() => {
         // Increment tile version to bust cache and force re-fetch
@@ -819,14 +1038,15 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
                                 filter={['>', ['get', 'heat_weight'], 0]}
                                 paint={{
                                     "heatmap-weight": ["get", "heat_weight"],
-                                    "heatmap-intensity": ["interpolate", ["linear"], ["zoom"], 0, 1, 11, 3],
+                                    "heatmap-intensity": ["interpolate", ["linear"], ["zoom"], 0, 1, 11, 2],
                                     "heatmap-color": [
                                         "interpolate", ["linear"], ["heatmap-density"],
                                         0, "rgba(0,0,0,0)",
-                                        0.5, "rgba(255, 87, 51, 0.4)",
+                                        0.2, "rgba(255, 87, 51, 0.1)",
+                                        0.6, "rgba(255, 87, 51, 0.4)",
                                         1, "rgba(255, 215, 0, 0.7)"
                                     ],
-                                    "heatmap-radius": ["interpolate", ["linear"], ["zoom"], 9, 10, 14, 40],
+                                    "heatmap-radius": ["interpolate", ["linear"], ["zoom"], 9, 8, 14, 30],
                                     "heatmap-opacity": ["interpolate", ["linear"], ["zoom"], 11, 1, 15, 0]
                                 }}
                             />
@@ -834,7 +1054,7 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
                             <Layer id="hearth-pins" type="circle" source-layer="properties" minzoom={11} maxzoom={24} filter={activeStatusFilters.length === 0 ? ['==', ['get', 'property_id'], 'NONE'] : ['in', ['get', 'status'], ['literal', activeStatusFilters]]} layout={{ "circle-sort-key": ["match", ["get", "status"], "for_sale", 100, "open_to_talking", 90, "for_rent", 80, "settled", 50, 0] }} paint={{ "circle-color": ["match", ["get", "status"], "for_sale", EMBER, "for_rent", EMBER, "open_to_talking", EMBER, "settled", INK_GREY, "unclaimed", "#9CA3AF", "#9CA3AF"], "circle-radius": ["interpolate", ["linear"], ["zoom"], 12, 0, 14, ["match", ["get", "status"], "unclaimed", 4, "settled", 6, 10]], "circle-opacity": ["interpolate", ["linear"], ["zoom"], 12, 0, 14, ["match", ["get", "status"], "unclaimed", 0.3, "settled", 0.6, 1]], "circle-stroke-width": 0 }} />
                             <Layer id="hearth-pulse" type="circle" source-layer="properties" minzoom={11} filter={activeStatusFilters.length === 0 ? ['==', ['get', 'property_id'], 'NONE'] : ['all', ['in', ['get', 'status'], ['literal', activeStatusFilters]], ['==', ['get', 'has_active_intent'], true]]} paint={{ "circle-color": EMBER, "circle-radius": ["interpolate", ["linear"], ["zoom"], 12, ["*", 12, pulseRadius], 16, ["*", 28, pulseRadius]], "circle-opacity": ["*", 0.35, ["-", 1, pulseRadius]] }} />
                             <Layer id="hearth-glyphs" type="symbol" source-layer="properties" minzoom={13} filter={activeStatusFilters.length === 0 ? ['==', ['get', 'property_id'], 'NONE'] : ['in', ['get', 'status'], ['literal', activeStatusFilters]]} layout={{ "text-field": ["match", ["get", "status"], "for_sale", "£", "for_rent", "r", "open_to_talking", "+", ""], "text-font": ["Open Sans Bold"], "text-size": ["interpolate", ["linear"], ["zoom"], 14, 9, 16, 11], "text-allow-overlap": true, "text-ignore-placement": true }} paint={{ "text-color": "#ffffff" }} />
-                            <Layer id="property-points" type="circle" source-layer="properties" minzoom={11} filter={activeStatusFilters.length === 0 ? ['==', ['get', 'property_id'], 'NONE'] : ['in', ['get', 'status'], ['literal', activeStatusFilters]]} paint={{ "circle-color": "#000000", "circle-radius": isMobile ? 24 : 12, "circle-opacity": 0, "circle-stroke-opacity": 0 }} />
+                            <Layer id="property-points" type="circle" source-layer="properties" minzoom={11} paint={{ "circle-color": "#000000", "circle-radius": isMobile ? 24 : 12, "circle-opacity": 0, "circle-stroke-opacity": 0 }} />
                         </Source>
                         {anchorData.features.length > 0 && (
                             <Source id="anchor-source" type="geojson" data={anchorData}>
@@ -842,6 +1062,10 @@ const PropertyMap = forwardRef<PropertyMapRef, {}>((props, ref) => {
                                 <Layer id="anchor-icons" type="symbol" minzoom={11} filter={anchorTierFilter === 'all' ? true : ["==", ["get", "tier"], anchorTierFilter]} layout={{ "icon-image": ["case", ["==", ["get", "subtype"], "primary"], "hearth-school", ["==", ["get", "subtype"], "secondary"], "hearth-school", ["==", ["get", "subtype"], "metro"], "hearth-rail", ["==", ["get", "subtype"], "ferry"], "hearth-rail", ["==", ["get", "subtype"], "bus"], "hearth-rail", ["==", ["get", "subtype"], "park"], "hearth-park", ["==", ["get", "subtype"], "coastal"], "hearth-coastal", ["==", ["get", "subtype"], "village_center"], "hearth-village", ["==", ["get", "subtype"], "gp"], "hearth-health", ["==", ["get", "subtype"], "hospital"], "hearth-health", ["==", ["get", "subtype"], "dentist"], "hearth-health", ["==", ["get", "subtype"], "supermarket"], "hearth-shop", ["==", ["get", "subtype"], "convenience"], "hearth-shop", "hearth-park"], "icon-size": 1, "icon-allow-overlap": true, "icon-ignore-placement": true }} paint={{ "icon-opacity": ["interpolate", ["linear"], ["zoom"], 11.5, 0, 12, 1], "icon-color": ["case", ["in", ["get", "id"], ["literal", lockedAnchorIds]], EMBER, ["==", ["get", "id"], activeAnchorId || ""], EMBER, INK_GREY], "icon-halo-color": "#ffffff", "icon-halo-width": 1 }} />
                                 <Layer id="anchor-labels" type="symbol" minzoom={14} filter={anchorTierFilter === 'all' ? true : ["==", ["get", "tier"], anchorTierFilter]} layout={{ "text-field": ["get", "name"], "text-size": 10, "text-offset": [0, 1.2], "text-anchor": "top", "text-max-width": 8 }} paint={{ "text-color": ["case", ["in", ["get", "id"], ["literal", lockedAnchorIds]], EMBER, ["==", ["get", "id"], activeAnchorId || ""], EMBER, INK_GREY], "text-halo-color": "#ffffff", "text-halo-width": 1 }} />
                             </Source>
+                        )}
+                        {postcodeBoundary && (
+                            /* Boundary managed via Nuclear Sync in processGeometry to bypass state lag */
+                            null
                         )}
                     </Map>
                     {isTrayExpanded && (
