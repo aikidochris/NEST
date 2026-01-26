@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useMemo } from "react";
-import { motion } from "framer-motion";
+import { motion, AnimatePresence } from "framer-motion";
 import type { PropertyPublic, PropertyImage as PropertyImageType } from "@/types/property";
 import { PropertyImage } from "./PropertyImage";
 import { PropertyImageLightbox } from "./PropertyImageLightbox";
@@ -14,6 +14,7 @@ import { resolveStatus, type Status } from "@/lib/status";
 import { isInspectOn } from "@/lib/inspect";
 import { getVibeZoneAtCoordinate, getVibeAssetUrl } from "@/lib/vibeZones";
 import { listConversationsForProperty, getConversationForProperty } from "@/lib/messaging";
+import { supabase } from "@/lib/supabase/client";
 import {
     type ProximityAnchor,
     processProximityAnchors,
@@ -150,6 +151,55 @@ export function PropertyProfileModal({
     const [pendingNoteAuthorId, setPendingNoteAuthorId] = useState<string | null>(null);
     const [proximityAnchors, setProximityAnchors] = useState<ProximityAnchor[]>([]);
     const [isFactsExpanded, setIsFactsExpanded] = useState(false);
+    const [showToast, setShowToast] = useState(false);
+    const [shareCount, setShareCount] = useState(0);
+
+    // Fetch share count
+    useEffect(() => {
+        let mounted = true;
+        async function fetchShareCount() {
+            const { data, error } = await supabase.rpc('get_property_share_count', { pid: property.property_id });
+            if (mounted && !error && typeof data === 'number') {
+                setShareCount(data);
+            }
+        }
+        fetchShareCount();
+        return () => { mounted = false; };
+    }, [property.property_id]);
+
+    // Handle share action
+    const handleShare = async () => {
+        const shareUrl = `${window.location.origin}/?property=${property.property_id}`;
+
+        // Analytics: Track share (fire and forget)
+        supabase.rpc('track_property_share', {
+            pid: property.property_id,
+            p_platform: navigator.share ? 'native' : 'clipboard'
+        }).then(() => {
+            // Optimistic update
+            setShareCount(prev => prev + 1);
+        });
+
+        if (navigator.share) {
+            try {
+                await navigator.share({
+                    title: property.display_label || 'Property on Nest',
+                    text: `Check out ${property.display_label}`,
+                    url: shareUrl,
+                });
+            } catch (err) {
+                console.log('[Share] User cancelled or error:', err);
+            }
+        } else {
+            try {
+                await navigator.clipboard.writeText(shareUrl);
+                setShowToast(true);
+                setTimeout(() => setShowToast(false), 3000);
+            } catch (err) {
+                console.error('[Share] Clipboard failed:', err);
+            }
+        }
+    };
 
     // Load images (mocked + real)
     useEffect(() => {
@@ -477,6 +527,17 @@ export function PropertyProfileModal({
                         {/* Soft gradient mask to blend with content */}
                         <div className="absolute inset-0 bg-gradient-to-t from-white/80 via-transparent to-transparent opacity-100" />
 
+                        {/* Share Button (Top right on glass, left of close) */}
+                        <button
+                            onClick={handleShare}
+                            className="absolute top-4 right-16 p-2 bg-black/10 hover:bg-black/20 rounded-full text-slate-700 hover:text-[#E08E5F] transition-colors backdrop-blur-md border border-white/20 z-10"
+                            aria-label="Share"
+                        >
+                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7.217 10.907a2.25 2.25 0 100 2.186m0-2.186c.18.324.283.696.283 1.093s-.103.77-.283 1.093m0-2.186l9.566-5.314m-9.566 7.5l9.566 5.314m0 0a2.25 2.25 0 103.935 2.186 2.25 2.25 0 00-3.935-2.186zm0-12.814a2.25 2.25 0 103.933-2.185 2.25 2.25 0 00-3.933 2.185z" />
+                            </svg>
+                        </button>
+
                         {/* Close Button (Top right on glass) */}
                         <button
                             onClick={onClose}
@@ -507,12 +568,26 @@ export function PropertyProfileModal({
 
                         {/* Price Estimate Pill (Top Right) */}
                         {priceEstimate && (
-                            <div className="absolute top-4 right-16 px-4 py-2 bg-white/90 backdrop-blur-md rounded-full border border-white/50 shadow-xl z-20">
+                            <div className="absolute top-4 right-28 px-4 py-2 bg-white/90 backdrop-blur-md rounded-full border border-white/50 shadow-xl z-20">
                                 <p className="text-[10px] font-bold uppercase tracking-widest text-[#E08E5F] mb-0.5">Est. Value</p>
                                 <p className="text-sm font-bold text-gray-900">{priceEstimate}</p>
                             </div>
                         )}
                     </div>
+
+                    {/* Toast Notification */}
+                    <AnimatePresence>
+                        {showToast && (
+                            <motion.div
+                                initial={{ opacity: 0, y: -10 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                exit={{ opacity: 0, y: -10 }}
+                                className="absolute top-24 left-1/2 -translate-x-1/2 px-5 py-2.5 bg-gray-900/90 backdrop-blur-md text-white text-xs font-bold uppercase tracking-widest rounded-full shadow-2xl z-50 pointer-events-none border border-white/10"
+                            >
+                                Link Copied to Clipboard
+                            </motion.div>
+                        )}
+                    </AnimatePresence>
 
                     {/* Scrollable Content */}
                     <div className="flex-1 overflow-y-auto overscroll-contain no-scrollbar">
@@ -590,6 +665,15 @@ export function PropertyProfileModal({
                                     <blockquote className="text-gray-800 text-xl md:text-2xl leading-relaxed font-serif italic opacity-95">
                                         {story}
                                     </blockquote>
+
+                                    {/* Social Proof: Calming Share Count */}
+                                    {shareCount > 0 && (
+                                        <div className="absolute bottom-4 right-6 flex items-center gap-1.5 opacity-50 hover:opacity-100 transition-opacity">
+                                            <p className="text-[9px] font-bold uppercase tracking-[0.15em] text-[#E08E5F]">
+                                                Shared {shareCount} times this month
+                                            </p>
+                                        </div>
+                                    )}
                                 </div>
                             </div>
 
