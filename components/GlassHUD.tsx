@@ -171,37 +171,24 @@ export function GlassHUD({
                 className={`absolute z-50 flex flex-col gap-3 transition-all duration-300 ${isMobile && !!selectedPropertyId ? 'opacity-0 translate-y-8' : 'opacity-100 translate-y-0'}`}
                 style={{ left: '20px', bottom: '80px', pointerEvents: 'auto', maxWidth: '200px' }}
             >
-                {/* Surface 1: Area Context Chip (Visible only when zoomed in to Neighbourhood/Local scale) */}
-                {/* Defines the spatial hierarchy: "You are in Monkseaton, inside North Tyneside" */}
-                <div
-                    className={`transition-all duration-500 ease-out flex items-center ${zoom >= 13
-                        ? 'opacity-100 translate-x-0'
-                        : 'opacity-0 -translate-x-4 pointer-events-none absolute'
-                        }`}
-                >
-                    <div className="bg-white/90 backdrop-blur-[12px] border border-[#E5E5E5] px-4 py-2 rounded-full shadow-sm cursor-default">
-                        <span className="text-[11px] font-bold uppercase tracking-widest text-gray-500">
-                            North Tyneside
-                        </span>
-                    </div>
-                </div>
+
 
                 {/* Surface 2: Lens Selector (Interactive - color-coded) */}
                 <div className="flex flex-col bg-white/90 backdrop-blur-[12px] border border-[#E5E5E5] rounded-xl shadow-sm overflow-hidden">
-                    <span className="px-4 pt-3 pb-2 text-[9px] font-bold uppercase tracking-[0.15em] text-[#999] border-b border-[#E5E5E5]">
+                    <div className="px-4 pt-3 pb-2 text-[9px] font-bold uppercase tracking-[0.15em] text-[#999] border-b border-[#E5E5E5] w-full">
                         Lens
-                    </span>
+                    </div>
 
                     {/* Pulse (Early interest) - heat_weight */}
                     <Tooltip content="A gentle pulse showing where people have been starting to look and interact lately." side="right">
                         <button
                             onClick={() => setHeatmapLens('pulse')}
-                            className={`px-4 py-2.5 text-left text-[13px] transition-all duration-200 flex items-center gap-2 ${heatmapLens === 'pulse'
+                            className={`w-full px-4 py-2.5 text-left text-[13px] transition-all duration-200 flex items-center gap-2 ${heatmapLens === 'pulse'
                                 ? 'bg-[#E08E5F] text-white font-semibold'
                                 : 'text-[#4A4A4A] hover:bg-[#F5F5F5] active:bg-[#EBEBEB]'
                                 }`}
                         >
-                            <span className={`w-2 h-2 rounded-full ${heatmapLens === 'pulse' ? 'bg-white' : 'bg-[#E08E5F]'}`} />
+                            <span className={`w-2 h-2 rounded-full shrink-0 ${heatmapLens === 'pulse' ? 'bg-white' : 'bg-[#E08E5F]'}`} />
                             Early interest
                         </button>
                     </Tooltip>
@@ -210,12 +197,12 @@ export function GlassHUD({
                     <Tooltip content="Homes and streets that are attracting attention right now." side="right">
                         <button
                             onClick={() => setHeatmapLens('watching')}
-                            className={`px-4 py-2.5 text-left text-[13px] transition-all duration-200 flex items-center gap-2 ${heatmapLens === 'watching'
+                            className={`w-full px-4 py-2.5 text-left text-[13px] transition-all duration-200 flex items-center gap-2 ${heatmapLens === 'watching'
                                 ? 'bg-[#E08E5F] text-white font-semibold'
                                 : 'text-[#4A4A4A] hover:bg-[#F5F5F5] active:bg-[#EBEBEB]'
                                 }`}
                         >
-                            <span className={`w-2 h-2 rounded-full ${heatmapLens === 'watching' ? 'bg-white' : 'bg-[#E08E5F]'}`} />
+                            <span className={`w-2 h-2 rounded-full shrink-0 ${heatmapLens === 'watching' ? 'bg-white' : 'bg-[#E08E5F]'}`} />
                             Being followed
                         </button>
                     </Tooltip>
@@ -224,12 +211,12 @@ export function GlassHUD({
                     <Tooltip content="Homes where owners are currently open to conversations, even if they’re not listed." side="right">
                         <button
                             onClick={() => setHeatmapLens('ready')}
-                            className={`px-4 py-2.5 text-left text-[13px] transition-all duration-200 flex items-center gap-2 ${heatmapLens === 'ready'
+                            className={`w-full px-4 py-2.5 text-left text-[13px] transition-all duration-200 flex items-center gap-2 ${heatmapLens === 'ready'
                                 ? 'bg-[#E08E5F] text-white font-semibold'
                                 : 'text-[#4A4A4A] hover:bg-[#F5F5F5] active:bg-[#EBEBEB]'
                                 }`}
                         >
-                            <span className={`w-2 h-2 rounded-full ${heatmapLens === 'ready' ? 'bg-white' : 'bg-[#E08E5F]'}`} />
+                            <span className={`w-2 h-2 rounded-full shrink-0 ${heatmapLens === 'ready' ? 'bg-white' : 'bg-[#E08E5F]'}`} />
                             Open to talking
                         </button>
                     </Tooltip>
@@ -238,12 +225,12 @@ export function GlassHUD({
                     <Tooltip content="Places where people have been sharing updates about their home or street." side="right">
                         <button
                             onClick={() => setHeatmapLens('stories')}
-                            className={`px-4 py-2.5 pb-3 text-left text-[13px] transition-all duration-200 flex items-center gap-2 ${heatmapLens === 'stories'
+                            className={`w-full px-4 py-2.5 pb-3 text-left text-[13px] transition-all duration-200 flex items-center gap-2 ${heatmapLens === 'stories'
                                 ? 'bg-[#E08E5F] text-white font-semibold'
                                 : 'text-[#4A4A4A] hover:bg-[#F5F5F5] active:bg-[#EBEBEB]'
                                 }`}
                         >
-                            <span className={`w-2 h-2 rounded-full ${heatmapLens === 'stories' ? 'bg-white' : 'bg-[#E08E5F]'}`} />
+                            <span className={`w-2 h-2 rounded-full shrink-0 ${heatmapLens === 'stories' ? 'bg-white' : 'bg-[#E08E5F]'}`} />
                             Local stories
                         </button>
                     </Tooltip>
