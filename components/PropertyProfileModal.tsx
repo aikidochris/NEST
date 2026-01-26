@@ -171,16 +171,24 @@ export function PropertyProfileModal({
     const handleShare = async () => {
         const shareUrl = `${window.location.origin}/?property=${property.property_id}`;
 
-        // Analytics: Track share (fire and forget)
-        supabase.rpc('track_property_share', {
-            pid: property.property_id,
-            p_platform: navigator.share ? 'native' : 'clipboard'
-        }).then(() => {
-            // Optimistic update
-            setShareCount(prev => prev + 1);
-        });
+        // SSR-safe check for Web Share API
+        const canNativeShare = typeof navigator !== 'undefined' && !!navigator.share;
 
-        if (navigator.share) {
+        // Analytics: Track share (fire and forget, wrapped in async IIFE)
+        (async () => {
+            try {
+                await supabase.rpc('track_property_share', {
+                    pid: property.property_id,
+                    p_platform: canNativeShare ? 'native' : 'clipboard'
+                });
+                // Optimistic update
+                setShareCount(prev => prev + 1);
+            } catch (trackError: unknown) {
+                console.error('[Share] Analytics tracking failed:', trackError);
+            }
+        })();
+
+        if (canNativeShare) {
             try {
                 await navigator.share({
                     title: property.display_label || 'Property on Nest',
