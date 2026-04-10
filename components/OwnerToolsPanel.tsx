@@ -18,26 +18,13 @@ interface OwnerToolsPanelProps {
     onUnclaim?: () => Promise<void>;
 }
 
-type ModalType = "none" | "story" | "status" | "album" | "cover" | "unclaim";
-
-interface Album {
-    id: string;
-    name: string;
-    visibility: "public" | "followers" | "private";
-    photoCount: number;
-}
+type ModalType = "none" | "story" | "status" | "cover" | "unclaim";
 
 const STATUS_OPTIONS: { status: Status; label: string }[] = [
     { status: "open_to_talking", label: "Open to Talking" },
     { status: "for_sale", label: "For Sale" },
     { status: "for_rent", label: "For Rent" },
     { status: "settled", label: "Settled" },
-];
-
-const VISIBILITY_OPTIONS = [
-    { value: "public", label: "Public", description: "Visible to everyone" },
-    { value: "followers", label: "Followers", description: "Only your followers" },
-    { value: "private", label: "Private", description: "Only you" },
 ];
 
 /**
@@ -59,15 +46,6 @@ export function OwnerToolsPanel({
 
     // Status selection
     const [selectedStatus, setSelectedStatus] = useState<Status | null>(null);
-
-    // Album management
-    const [albums, setAlbums] = useState<Album[]>([
-        { id: "1", name: "Kitchen", visibility: "private", photoCount: 0 },
-        { id: "2", name: "Living Room", visibility: "private", photoCount: 0 },
-        { id: "3", name: "Garden", visibility: "public", photoCount: 0 },
-    ]);
-    const [newAlbumName, setNewAlbumName] = useState("");
-    const [newAlbumVisibility, setNewAlbumVisibility] = useState<"public" | "followers" | "private">("private");
 
     // File upload
     const fileInputRef = useRef<HTMLInputElement>(null);
@@ -104,29 +82,6 @@ export function OwnerToolsPanel({
             onStatusUpdate(selectedStatus);
         }
         setActiveModal("none");
-    };
-
-    // Handle album create
-    const handleAlbumCreate = () => {
-        if (!newAlbumName.trim()) return;
-
-        const newAlbum: Album = {
-            id: `album-${Date.now()}`,
-            name: newAlbumName.trim(),
-            visibility: newAlbumVisibility,
-            photoCount: 0,
-        };
-
-        setAlbums(prev => [...prev, newAlbum]);
-        setNewAlbumName("");
-        setNewAlbumVisibility("private");
-    };
-
-    // Handle album visibility change
-    const handleAlbumVisibilityChange = (albumId: string, visibility: "public" | "followers" | "private") => {
-        setAlbums(prev => prev.map(album =>
-            album.id === albumId ? { ...album, visibility } : album
-        ));
     };
 
     // Handle unclaim confirmation
@@ -181,18 +136,6 @@ export function OwnerToolsPanel({
                             className="hidden"
                             onChange={handleCoverSelect}
                         />
-
-                        {/* Manage albums */}
-                        <button
-                            onClick={() => setActiveModal("album")}
-                            className="w-full flex items-center gap-3 px-3 py-3 text-sm text-gray-600 dark:text-gray-400 bg-gray-50 dark:bg-gray-800/50 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors text-left"
-                        >
-                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
-                            </svg>
-                            <span>Manage albums</span>
-                            <span className="ml-auto text-xs text-gray-400">{albums.length} albums</span>
-                        </button>
 
                         {/* Edit story */}
                         <button
@@ -326,100 +269,6 @@ export function OwnerToolsPanel({
                                 className="flex-1 py-2 text-sm font-medium text-white bg-gray-900 dark:bg-white dark:text-gray-900 rounded-lg hover:bg-gray-800 dark:hover:bg-gray-100 disabled:opacity-50"
                             >
                                 Update status
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
-
-            {/* Manage Albums Modal */}
-            {activeModal === "album" && (
-                <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
-                    <div className="absolute inset-0 bg-black/50" onClick={() => setActiveModal("none")} />
-                    <div className="relative bg-white dark:bg-gray-900 rounded-xl shadow-xl w-full max-w-md max-h-[80vh] overflow-hidden flex flex-col">
-                        <div className="p-4 border-b border-gray-200 dark:border-gray-700">
-                            <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
-                                Manage albums
-                            </h3>
-                            <p className="text-xs text-gray-500 mt-1">
-                                Control who can see your photo albums
-                            </p>
-                        </div>
-
-                        {/* Albums list */}
-                        <div className="flex-1 overflow-y-auto p-4 space-y-3">
-                            {albums.map((album) => (
-                                <div
-                                    key={album.id}
-                                    className="flex items-center gap-3 p-3 bg-gray-50 dark:bg-gray-800 rounded-lg"
-                                >
-                                    <div className="w-10 h-10 bg-gray-200 dark:bg-gray-700 rounded-lg flex items-center justify-center">
-                                        <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                                        </svg>
-                                    </div>
-                                    <div className="flex-1 min-w-0">
-                                        <p className="text-sm font-medium text-gray-900 dark:text-white truncate">
-                                            {album.name}
-                                        </p>
-                                        <p className="text-xs text-gray-500">
-                                            {album.photoCount} photos
-                                        </p>
-                                    </div>
-                                    <select
-                                        value={album.visibility}
-                                        onChange={(e) => handleAlbumVisibilityChange(album.id, e.target.value as "public" | "followers" | "private")}
-                                        className="text-xs bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded px-2 py-1 text-gray-700 dark:text-gray-300"
-                                    >
-                                        {VISIBILITY_OPTIONS.map((opt) => (
-                                            <option key={opt.value} value={opt.value}>
-                                                {opt.label}
-                                            </option>
-                                        ))}
-                                    </select>
-                                </div>
-                            ))}
-
-                            {/* Create new album */}
-                            <div className="border-t border-gray-200 dark:border-gray-700 pt-3 mt-3">
-                                <p className="text-xs font-medium text-gray-500 mb-2">Create new album</p>
-                                <div className="flex gap-2">
-                                    <input
-                                        type="text"
-                                        value={newAlbumName}
-                                        onChange={(e) => setNewAlbumName(e.target.value)}
-                                        placeholder="Album name"
-                                        className="flex-1 px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
-                                    />
-                                    <select
-                                        value={newAlbumVisibility}
-                                        onChange={(e) => setNewAlbumVisibility(e.target.value as "public" | "followers" | "private")}
-                                        className="text-sm bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg px-2 text-gray-700 dark:text-gray-300"
-                                    >
-                                        {VISIBILITY_OPTIONS.map((opt) => (
-                                            <option key={opt.value} value={opt.value}>
-                                                {opt.label}
-                                            </option>
-                                        ))}
-                                    </select>
-                                </div>
-                                <button
-                                    onClick={handleAlbumCreate}
-                                    disabled={!newAlbumName.trim()}
-                                    className="w-full mt-2 py-2 text-sm text-gray-600 dark:text-gray-400 bg-gray-100 dark:bg-gray-800 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700 disabled:opacity-50"
-                                >
-                                    + Create album
-                                </button>
-                            </div>
-                        </div>
-
-                        {/* Close button */}
-                        <div className="p-4 border-t border-gray-200 dark:border-gray-700">
-                            <button
-                                onClick={() => setActiveModal("none")}
-                                className="w-full py-2 text-sm font-medium text-white bg-gray-900 dark:bg-white dark:text-gray-900 rounded-lg hover:bg-gray-800 dark:hover:bg-gray-100"
-                            >
-                                Done
                             </button>
                         </div>
                     </div>

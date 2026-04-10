@@ -320,12 +320,13 @@ export function PropertyProfileModal({
     // Unclaimed homes with no summary_text do not get a story block — the UI
     // handles the empty unclaimed state elsewhere (card preview + Leave a Note CTA).
     const getStory = (): string | null => {
+        if (!property.is_claimed) {
+            // No story on unclaimed homes — do not imply owner presence,
+            // even if a summary_text artifact remains in the database.
+            return null;
+        }
         if (property.summary_text) {
             return property.summary_text;
-        }
-        if (!property.is_claimed) {
-            // No story on unclaimed homes — do not imply owner presence
-            return null;
         }
         // Claimed but no story yet — honest empty state owned by the owner
         return "No story yet. The owner hasn't shared their story with the neighbourhood.";

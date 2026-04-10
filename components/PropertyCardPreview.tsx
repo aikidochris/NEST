@@ -96,14 +96,15 @@ export function PropertyCardPreview({
     };
 
     // Get story preview text.
-    // Returns null when there is no real owner content: unclaimed homes with no summary
-    // should not be wrapped in story/quote framing that implies owner presence.
+    // Returns null when there is no real owner content: unclaimed homes
+    // should not be wrapped in story/quote framing that implies owner presence,
+    // even if a summary_text artifact exists in the database.
     const getStoryPreview = (): string | null => {
-        if (property.summary_text) {
-            return property.summary_text;
-        }
         if (!property.is_claimed) {
             return null; // No story framing on unclaimed homes
+        }
+        if (property.summary_text) {
+            return property.summary_text;
         }
         return "No story yet."; // Claimed but owner hasn't written one
     };
