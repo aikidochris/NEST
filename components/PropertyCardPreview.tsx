@@ -95,15 +95,17 @@ export function PropertyCardPreview({
         return statuses;
     };
 
-    // Get story preview text
-    const getStoryPreview = (): string => {
+    // Get story preview text.
+    // Returns null when there is no real owner content: unclaimed homes with no summary
+    // should not be wrapped in story/quote framing that implies owner presence.
+    const getStoryPreview = (): string | null => {
         if (property.summary_text) {
             return property.summary_text;
         }
         if (!property.is_claimed) {
-            return "This home hasn't been claimed yet. If you live here, you can claim it and share your story with the neighborhood.";
+            return null; // No story framing on unclaimed homes
         }
-        return "No story yet. The owner hasn't shared their story with the neighborhood.";
+        return "No story yet."; // Claimed but owner hasn't written one
     };
 
     const intentStatuses = getIntentStatuses();
@@ -142,13 +144,15 @@ export function PropertyCardPreview({
                                 {title}
                             </h2>
 
-                            {/* Story preview */}
+                            {/* Story preview: only shown when there is real content */}
+                            {storyPreview && (
                             <div className="relative mb-6">
                                 <span className="absolute -top-3 -left-1 text-4xl text-orange-200/40 font-serif leading-none italic select-none">“</span>
                                 <p className="text-gray-600 dark:text-gray-400 text-base leading-relaxed line-clamp-6 pl-4 border-l border-orange-100/50">
                                     {storyPreview}
                                 </p>
                             </div>
+                            )}
 
                             {/* Intent chips */}
                             {intentStatuses.length > 0 && (

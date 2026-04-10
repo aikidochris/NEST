@@ -157,7 +157,7 @@ function AreaVibeTab({ stats }: { stats: VibeStats | null }) {
                 </p>
             )}
             <p className="text-xs text-gray-400 text-center">
-                This area is waiting for more neighbors to join Nest.
+                This area is waiting for more neighbors to join Hearth.
             </p>
         </div>
     );

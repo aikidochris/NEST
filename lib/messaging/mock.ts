@@ -67,7 +67,7 @@ function hoursAgo(hours: number): string {
 
 export const mockMessagesByConversationId: Record<string, Message[]> = {
     "conv-1": [
-        { id: "msg-1-1", conversation_id: "conv-1", sender: "me", body: "Hi! I noticed your home on Nest. We're looking to move to the area and love the look of your street. Do you mind if I ask a few questions?", created_at: hoursAgo(26) },
+        { id: "msg-1-1", conversation_id: "conv-1", sender: "me", body: "Hi! I noticed your home on Hearth. We're looking to move to the area and love the look of your street. Do you mind if I ask a few questions?", created_at: hoursAgo(26) },
         { id: "msg-1-2", conversation_id: "conv-1", sender: "them", body: "Of course! Happy to help. We've been here for almost 8 years now.", created_at: hoursAgo(25) },
         { id: "msg-1-3", conversation_id: "conv-1", sender: "me", body: "That's wonderful. How would you describe the community feel?", created_at: hoursAgo(24) },
         { id: "msg-1-4", conversation_id: "conv-1", sender: "them", body: "Really friendly. We have a WhatsApp group for the street, and everyone looks out for each other. Kids play outside in the summer.", created_at: hoursAgo(23) },

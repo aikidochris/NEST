@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { notFound } from "next/navigation";
 import { resolveStatus, type Status } from "@/lib/status";
 import { AreaVibeBar, type VibeStats, type LiveFeedEvent } from "@/components/AreaVibeBar";
 import {
@@ -577,6 +578,12 @@ function SamplePinsOverlay({ semantic = false }: { semantic?: boolean }) {
 // =============================================================================
 
 export default function UIBaselinePage() {
+    // Gate: this page must not be publicly accessible in production.
+    // notFound() triggers the Next.js 404 page and halts rendering.
+    if (process.env.NODE_ENV !== "development") {
+        notFound();
+    }
+
     const [vibeExpanded, setVibeExpanded] = useState(true);
     const [glassMode, setGlassMode] = useState(false);
     const [darkMode, setDarkMode] = useState(false);
@@ -1186,7 +1193,7 @@ export default function UIBaselinePage() {
 
                 {/* Footer */}
                 <footer className="text-center text-gray-400 text-sm py-8">
-                    UI Baseline — Nest Pre-MVP — Dev Only
+                    UI Baseline — Hearth Pre-MVP — Dev Only
                 </footer>
             </div>
         </div>

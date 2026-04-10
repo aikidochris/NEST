@@ -57,11 +57,12 @@ interface PropertyProfileModalProps {
     onUnclaim?: () => Promise<void>;
 }
 
-// Mock image data for development (will be fetched from API later)
-function getMockImages(property: PropertyPublic): PropertyImageType[] {
+// Build image list from real data only — cover image if present, nothing else.
+// Do NOT inject mock/placeholder album tiles; that would imply content that doesn't exist.
+function getRealImages(property: PropertyPublic): PropertyImageType[] {
     const images: PropertyImageType[] = [];
 
-    // Add cover if exists
+    // Include cover image if the property actually has one
     if (property.cover_image_url) {
         images.push({
             id: "cover-1",
@@ -75,31 +76,8 @@ function getMockImages(property: PropertyPublic): PropertyImageType[] {
         });
     }
 
-    // Add mock album images if has_additional_images is true
-    if (property.has_additional_images) {
-        images.push(
-            {
-                id: "album-1",
-                property_id: property.property_id,
-                url: "",  // Will show as locked
-                kind: "album",
-                album_key: "living",
-                visibility: "chat_unlocked",
-                sort_order: 1,
-                created_at: new Date().toISOString(),
-            },
-            {
-                id: "album-2",
-                property_id: property.property_id,
-                url: "",
-                kind: "album",
-                album_key: "kitchen",
-                visibility: "chat_unlocked",
-                sort_order: 2,
-                created_at: new Date().toISOString(),
-            },
-        );
-    }
+    // NOTE: has_additional_images signals DB content exists but we do NOT inject
+    // placeholder album tiles. Real album images come from property.public_images only.
 
     return images;
 }
@@ -191,7 +169,7 @@ export function PropertyProfileModal({
         if (canNativeShare) {
             try {
                 await navigator.share({
-                    title: property.display_label || 'Property on Nest',
+                    title: property.display_label || 'Property on Hearth',
                     text: `Check out ${property.display_label}`,
                     url: shareUrl,
                 });
@@ -209,12 +187,12 @@ export function PropertyProfileModal({
         }
     };
 
-    // Load images (mocked + real)
+    // Load images from real data only (cover + public_images from API)
     useEffect(() => {
-        const mock = getMockImages(property);
+        const cover = getRealImages(property);
         const real = property.public_images || [];
-        // dedupe by URL if necessary, but here we just combine
-        setImages([...real, ...mock.filter(m => !real.some(r => r.url === m.url))]);
+        // Cover is already deduped by URL — real images take precedence over cover stub
+        setImages([...real, ...cover.filter(c => !real.some(r => r.url === c.url))]);
     }, [property]);
 
     // Resolve Vibe Zone for neighborhood imagery and theme
@@ -338,14 +316,19 @@ export function PropertyProfileModal({
         "Property";
 
     // Get story text
-    const getStory = (): string => {
+    // Only returns a value when there is real owner content to display.
+    // Unclaimed homes with no summary_text do not get a story block — the UI
+    // handles the empty unclaimed state elsewhere (card preview + Leave a Note CTA).
+    const getStory = (): string | null => {
         if (property.summary_text) {
             return property.summary_text;
         }
         if (!property.is_claimed) {
-            return "This home hasn't been claimed yet. If you live here, you can claim it and share your story with the neighborhood.";
+            // No story on unclaimed homes — do not imply owner presence
+            return null;
         }
-        return "No story yet. The owner hasn't shared their story with the neighborhood.";
+        // Claimed but no story yet — honest empty state owned by the owner
+        return "No story yet. The owner hasn't shared their story with the neighbourhood.";
     };
 
     // Get intent statuses
@@ -494,7 +477,7 @@ export function PropertyProfileModal({
     const headline = property.metadata?.headline;
     const priceEstimate = property.metadata?.price_estimate;
     const ownerInfo = property.metadata?.owner as { name?: string; avatar?: string } | undefined;
-    const customFacts = property.metadata?.facts as { beds?: string; baths?: string; sqft?: string; epc?: string } | undefined;
+    const customFacts = property.metadata?.facts as { beds?: string; baths?: string; sqft?: string; epc?: string; tenure?: string } | undefined;
 
     return (
         <>
@@ -653,22 +636,31 @@ export function PropertyProfileModal({
                                 </div>
                             </div>
 
-                            {/* Story Section: Emotional Core (Redesigned) */}
+                            {/* Story Section: only render for claimed homes OR homes with a real summary */}
+                            {story && (
                             <div className="mb-12 relative touch-pan-y">
                                 <div className="absolute -top-6 -left-2 text-6xl text-orange-200/50 font-serif leading-none italic select-none">“</div>
                                 <div className="bg-orange-50/40 backdrop-blur-md border border-orange-100/50 rounded-[24px] p-6 md:p-8 shadow-inner shadow-orange-900/5 relative overflow-hidden">
-                                    <div className="flex items-center justify-between mb-6">
+                                    <div className={`flex items-center mb-6 ${property.is_claimed && ownerInfo?.avatar ? 'justify-between' : 'justify-start'}`}>
                                         <div className="flex flex-col">
                                             <h3 className="text-sm font-bold tracking-[0.2em] uppercase text-orange-300">The Story</h3>
-                                            <p className="text-xs text-gray-400 font-medium">From {ownerInfo?.name || "the current owner"}</p>
+                                            {/* Only show byline if owner has explicitly provided their name — no fallback */}
+                                            {property.is_claimed && ownerInfo?.name && (
+                                                <p className="text-xs text-gray-400 font-medium">
+                                                    From {ownerInfo.name}
+                                                </p>
+                                            )}
                                         </div>
-                                        <div className="w-12 h-12 rounded-full overflow-hidden border-2 border-white shadow-md ring-4 ring-orange-50/30">
-                                            <img
-                                                src={ownerInfo?.avatar || "https://api.dicebear.com/7.x/avataaars/svg?seed=Felix"}
-                                                alt={ownerInfo?.name || "Owner"}
-                                                className="w-full h-full object-cover"
-                                            />
-                                        </div>
+                                        {/* Only render avatar if owner has explicitly provided it — no generated/fake avatars */}
+                                        {property.is_claimed && ownerInfo?.avatar && (
+                                            <div className="w-12 h-12 rounded-full overflow-hidden border-2 border-white shadow-md ring-4 ring-orange-50/30 flex-shrink-0 ml-4">
+                                                <img
+                                                    src={ownerInfo.avatar}
+                                                    alt={ownerInfo.name || "Owner"}
+                                                    className="w-full h-full object-cover"
+                                                />
+                                            </div>
+                                        )}
                                     </div>
                                     <blockquote className="text-gray-800 text-xl md:text-2xl leading-relaxed font-serif italic opacity-95">
                                         {story}
@@ -684,6 +676,7 @@ export function PropertyProfileModal({
                                     )}
                                 </div>
                             </div>
+                            )}
 
                             {/* Property Facts Accordion */}
                             <div className="mb-10 border-t border-gray-100">
@@ -705,19 +698,19 @@ export function PropertyProfileModal({
                                     <div className="pb-6 grid grid-cols-2 gap-4">
                                         <div className="bg-white/40 p-3 rounded-xl border border-white/50">
                                             <p className="text-[10px] uppercase tracking-widest text-gray-400 mb-1">Floor Area</p>
-                                            <p className="text-sm font-medium text-gray-800">{customFacts?.sqft || "1,240 sq ft"}</p>
+                                            <p className="text-sm font-medium text-gray-800">{customFacts?.sqft || "Not available"}</p>
                                         </div>
                                         <div className="bg-white/40 p-3 rounded-xl border border-white/50">
                                             <p className="text-[10px] uppercase tracking-widest text-gray-400 mb-1">Layout</p>
-                                            <p className="text-sm font-medium text-gray-800">{customFacts?.beds && customFacts?.baths ? `${customFacts.beds}, ${customFacts.baths}` : "3 Bed, 2 Bath"}</p>
+                                            <p className="text-sm font-medium text-gray-800">{customFacts?.beds && customFacts?.baths ? `${customFacts.beds}, ${customFacts.baths}` : "Not available"}</p>
                                         </div>
                                         <div className="bg-white/40 p-3 rounded-xl border border-white/50">
                                             <p className="text-[10px] uppercase tracking-widest text-gray-400 mb-1">EPC Rating</p>
-                                            <p className="text-sm font-medium text-gray-800">{customFacts?.epc || "B (84)"}</p>
+                                            <p className="text-sm font-medium text-gray-800">{customFacts?.epc || "Not available"}</p>
                                         </div>
                                         <div className="bg-white/40 p-3 rounded-xl border border-white/50">
                                             <p className="text-[10px] uppercase tracking-widest text-gray-400 mb-1">Tenure</p>
-                                            <p className="text-sm font-medium text-gray-800">Freehold</p>
+                                            <p className="text-sm font-medium text-gray-800">{customFacts?.tenure || "Not available"}</p>
                                         </div>
                                     </div>
                                 )}

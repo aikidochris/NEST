@@ -553,7 +553,7 @@ export function PropertyMessagePanel({
                             </svg>
                         </div>
                         <p className="text-sm text-gray-600">
-                            Your note will be shared if the owner joins Nest.
+                            Your note will be shared if the owner joins Hearth.
                         </p>
                     </div>
                 ) : isOwner ? (
